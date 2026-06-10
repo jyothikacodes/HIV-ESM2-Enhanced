@@ -46,11 +46,15 @@ class AttentionWeightedClassifier(nn.Module):
         # Classification head
         self.classifier = nn.Linear(input_dim, 1)
         
-    def forward(self, x, mask=None):
+    def forward(self, x, mask=None, rare_mutation_weights=None):
         """
         Args:
             x: Input tensor of shape (batch_size, seq_len, input_dim)
             mask: Boolean mask of shape (batch_size, seq_len), 0 for padding
+            rare_mutation_weights: Optional tensor of shape (batch_size, seq_len)
+                with per-residue rarity weights. When provided, attention weights
+                are multiplied by these values and renormalized. When None,
+                behavior is identical to the original implementation.
             
         Returns:
             logits: Classification logits (batch_size, 1)
@@ -69,6 +73,12 @@ class AttentionWeightedClassifier(nn.Module):
         # Normalize weights
         weights = F.softmax(scores, dim=1)
         
+        # Integrate rare mutation weighting (if provided)
+        if rare_mutation_weights is not None:
+            weights = weights * rare_mutation_weights
+            # Re-normalize so weights sum to 1 per sample
+            weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-9)
+        
         # Weighted pooling: (batch, 1, seq_len) @ (batch, seq_len, dim) -> (batch, 1, dim)
         pooled = torch.bmm(weights.unsqueeze(1), x).squeeze(1)
         
@@ -79,21 +89,38 @@ class AttentionWeightedClassifier(nn.Module):
 
 
 class EmbeddingDataset(Dataset):
-    """Dataset for variable-length embeddings."""
-    def __init__(self, embeddings_list, labels):
+    """Dataset for variable-length embeddings with optional rare mutation weights."""
+    def __init__(self, embeddings_list, labels, rare_mutation_weights_list=None):
         self.embeddings = embeddings_list
         self.labels = torch.FloatTensor(labels)
+        self.rare_weights = rare_mutation_weights_list
         
     def __len__(self):
         return len(self.embeddings)
         
     def __getitem__(self, idx):
-        return torch.FloatTensor(self.embeddings[idx]), self.labels[idx]
+        emb = torch.FloatTensor(self.embeddings[idx])
+        label = self.labels[idx]
+        if self.rare_weights is not None:
+            rw = torch.FloatTensor(self.rare_weights[idx])
+            return emb, label, rw
+        return emb, label, None
 
 
 def collate_embeddings(batch):
-    """Collate function to pad variable-length embedding sequences."""
-    embeddings, labels = zip(*batch)
+    """Collate function to pad variable-length embedding sequences.
+    
+    Handles both legacy (emb, label) and extended (emb, label, rare_weights)
+    tuple formats from EmbeddingDataset.
+    """
+    # Unpack — supports both 2-element and 3-element tuples
+    if len(batch[0]) == 3:
+        embeddings, labels, rare_weights_items = zip(*batch)
+        has_rare_weights = rare_weights_items[0] is not None
+    else:
+        embeddings, labels = zip(*batch)
+        has_rare_weights = False
+        rare_weights_items = None
     
     # Get lengths
     lengths = torch.LongTensor([len(e) for e in embeddings])
@@ -108,6 +135,14 @@ def collate_embeddings(batch):
         end = lengths[i]
         padded_embeddings[i, :end, :] = emb
         mask[i, :end] = 1
+    
+    # Pad rare mutation weights if present
+    if has_rare_weights:
+        padded_rare_weights = torch.zeros(len(embeddings), max_len)
+        for i, rw in enumerate(rare_weights_items):
+            end = lengths[i]
+            padded_rare_weights[i, :end] = rw[:end]
+        return padded_embeddings, torch.FloatTensor(labels), mask, padded_rare_weights
         
     return padded_embeddings, torch.FloatTensor(labels), mask
 
@@ -117,6 +152,8 @@ def train_attention_model(
     labels: np.ndarray,
     val_embeddings_list: Optional[List[np.ndarray]] = None,
     val_labels: Optional[np.ndarray] = None,
+    rare_mutation_weights_list: Optional[List[np.ndarray]] = None,
+    val_rare_mutation_weights_list: Optional[List[np.ndarray]] = None,
     input_dim: int = 1280,
     attention_dim: int = 256,
     batch_size: int = 32,
@@ -133,12 +170,17 @@ def train_attention_model(
         labels: Binary labels
         val_embeddings_list: Validation embeddings
         val_labels: Validation labels
+        rare_mutation_weights_list: Optional list of per-residue rarity
+            weight vectors for training sequences. When provided, attention
+            weights are modulated by these values during training.
+        val_rare_mutation_weights_list: Same as above for validation set.
         input_dim: Embedding dimension
         attention_dim: Hidden dimension for attention net
         batch_size: Batch size
         epochs: Number of training epochs
         lr: Learning rate
         device: Torch device
+        verbose: Print progress
         
     Returns:
         Trained AttentionWeightedClassifier model
@@ -147,13 +189,18 @@ def train_attention_model(
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
     # Prepare data
-    train_dataset = EmbeddingDataset(embeddings_list, labels)
+    train_dataset = EmbeddingDataset(
+        embeddings_list, labels,
+        rare_mutation_weights_list=rare_mutation_weights_list
+    )
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, 
         shuffle=True, 
         collate_fn=collate_embeddings
     )
+    
+    use_rare_weights = rare_mutation_weights_list is not None
     
     # Init model
     model = AttentionWeightedClassifier(input_dim, attention_dim).to(device)
@@ -167,13 +214,21 @@ def train_attention_model(
         model.train()
         train_loss = 0
         
-        for batch_emb, batch_y, batch_mask in train_loader:
+        for batch_data in train_loader:
+            # Unpack — 3 elements (legacy) or 4 elements (with rare weights)
+            if use_rare_weights and len(batch_data) == 4:
+                batch_emb, batch_y, batch_mask, batch_rw = batch_data
+                batch_rw = batch_rw.to(device)
+            else:
+                batch_emb, batch_y, batch_mask = batch_data[:3]
+                batch_rw = None
+            
             batch_emb = batch_emb.to(device)
             batch_y = batch_y.to(device).unsqueeze(1)
             batch_mask = batch_mask.to(device)
             
             optimizer.zero_grad()
-            logits, _ = model(batch_emb, batch_mask)
+            logits, _ = model(batch_emb, batch_mask, rare_mutation_weights=batch_rw)
             loss = criterion(logits, batch_y)
             
             loss.backward()
@@ -186,7 +241,10 @@ def train_attention_model(
             val_probs = []
             
             # Process validation in batches
-            val_dataset = EmbeddingDataset(val_embeddings_list, val_labels)
+            val_dataset = EmbeddingDataset(
+                val_embeddings_list, val_labels,
+                rare_mutation_weights_list=val_rare_mutation_weights_list
+            )
             val_loader = DataLoader(
                 val_dataset,
                 batch_size=batch_size,
@@ -194,11 +252,19 @@ def train_attention_model(
                 collate_fn=collate_embeddings
             )
             
+            val_use_rw = val_rare_mutation_weights_list is not None
+            
             with torch.no_grad():
-                for v_emb, _, v_mask in val_loader:
+                for val_batch in val_loader:
+                    if val_use_rw and len(val_batch) == 4:
+                        v_emb, _, v_mask, v_rw = val_batch
+                        v_rw = v_rw.to(device)
+                    else:
+                        v_emb, _, v_mask = val_batch[:3]
+                        v_rw = None
                     v_emb = v_emb.to(device)
                     v_mask = v_mask.to(device)
-                    logits, _ = model(v_emb, v_mask)
+                    logits, _ = model(v_emb, v_mask, rare_mutation_weights=v_rw)
                     probs = torch.sigmoid(logits).cpu().numpy()
                     val_probs.extend(probs)
             
@@ -236,8 +302,7 @@ def get_default_xgb_params(class_weight: float = 1.0) -> Dict:
         'scale_pos_weight': class_weight,
         'random_state': 42,
         'n_jobs': -1,
-        'eval_metric': 'auc',
-        'use_label_encoder': False
+        'eval_metric': 'auc'
     }
 
 
@@ -415,14 +480,37 @@ def per_drug_training(
     results = {}
 
     for drug in drugs:
-        # Get binary labels (using class2 suffix)
-        label_col = f"{drug}_class2" if f"{drug}_class2" in phenotypes.columns else drug
+        # Get binary labels (prefer explicit binarized columns)
+        class2_col = f"{drug}_class2"
+        class3_col = f"{drug}_class3"
+        fc_col = f"{drug}_FC"
 
-        if label_col not in phenotypes.columns:
-            print(f"  Skipping {drug}: no label column found")
+        if class2_col in phenotypes.columns:
+            y = phenotypes[class2_col].values
+        elif class3_col in phenotypes.columns:
+            # Prefer class3 if class2 isn't available (may encode resistance differently)
+            y = phenotypes[class3_col].values
+        elif fc_col in phenotypes.columns:
+            # Binarize fold-change values using the standard threshold (>=2.5)
+            fc_vals = phenotypes[fc_col].values
+            y = np.full_like(fc_vals, np.nan, dtype=float)
+            valid_fc = ~np.isnan(fc_vals)
+            y[valid_fc] = (fc_vals[valid_fc] >= 2.5).astype(float)
+        elif drug in phenotypes.columns:
+            # Fall back to the raw drug column if present (assume already binary)
+            y = phenotypes[drug].values
+        else:
+            reason = "no label column found"
+            print(f"  Skipping {drug}: {reason}")
+            results[drug] = {
+                'auc': np.nan,
+                'n_samples': 0,
+                'n_resistant': 0,
+                'n_susceptible': 0,
+                'skipped': True,
+                'reason': reason
+            }
             continue
-
-        y = phenotypes[label_col].values
 
         # Filter valid samples
         valid_mask = ~np.isnan(y)
@@ -434,16 +522,56 @@ def per_drug_training(
             
         y_valid = y[valid_mask].astype(int)
 
+        n_resistant = int(y_valid.sum())
+        n_susceptible = int(len(y_valid) - n_resistant)
+
         if len(np.unique(y_valid)) < 2:
-            print(f"  Skipping {drug}: single class only")
+            reason = "single class only"
+            print(f"  Skipping {drug}: {reason}")
+            results[drug] = {
+                'auc': np.nan,
+                'n_samples': int(len(y_valid)),
+                'n_resistant': n_resistant,
+                'n_susceptible': n_susceptible,
+                'skipped': True,
+                'reason': reason
+            }
             continue
 
-        n_resistant = y_valid.sum()
-        n_susceptible = len(y_valid) - n_resistant
+        # Ensure we have enough samples per class for stratified CV
+        unique, counts = np.unique(y_valid, return_counts=True)
+        min_class_count = counts.min()
+
+        if min_class_count < 2:
+            reason = f"not enough samples in at least one class (min={min_class_count})"
+            print(f"  Skipping {drug}: {reason}")
+            results[drug] = {
+                'auc': np.nan,
+                'n_samples': int(len(y_valid)),
+                'n_resistant': n_resistant,
+                'n_susceptible': n_susceptible,
+                'skipped': True,
+                'reason': reason
+            }
+            continue
+
+        effective_splits = min(n_splits, int(min_class_count))
+        if effective_splits < 2:
+            reason = "effective CV folds < 2"
+            print(f"  Skipping {drug}: {reason}")
+            results[drug] = {
+                'auc': np.nan,
+                'n_samples': int(len(y_valid)),
+                'n_resistant': n_resistant,
+                'n_susceptible': n_susceptible,
+                'skipped': True,
+                'reason': reason
+            }
+            continue
 
         # Cross-validation predictions
-        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-        
+        cv = StratifiedKFold(n_splits=effective_splits, shuffle=True, random_state=random_state)
+
         # Placeholder for predictions
         y_pred = np.zeros(len(y_valid))
 
@@ -494,7 +622,7 @@ def per_drug_training(
             model = xgb.XGBClassifier(
                 n_estimators=300, max_depth=6, learning_rate=0.05,
                 scale_pos_weight=scale_pos_weight, random_state=random_state,
-                use_label_encoder=False, eval_metric='auc', n_jobs=-1
+                eval_metric='auc', n_jobs=-1
             )
             y_pred = cross_val_predict(model, X_valid, y_valid, cv=cv, method='predict_proba')[:, 1]
         elif model_type == 'rf':
@@ -538,25 +666,49 @@ def aggregate_drug_results(results: Dict) -> pd.DataFrame:
     summary = []
 
     for drug, res in results.items():
+        # Use .get with defaults to be robust against malformed result entries
+        auc = res.get('auc', np.nan)
+        n_samples = res.get('n_samples', 0)
+        n_resistant = res.get('n_resistant', 0)
+        n_susceptible = res.get('n_susceptible', 0)
+
+        prevalence = np.nan
+        try:
+            if n_samples and n_samples > 0:
+                prevalence = n_resistant / n_samples
+        except Exception:
+            prevalence = np.nan
+
         summary.append({
             'drug': drug,
-            'auc': res['auc'],
-            'n_samples': res['n_samples'],
-            'n_resistant': res['n_resistant'],
-            'n_susceptible': res['n_susceptible'],
-            'prevalence': res['n_resistant'] / res['n_samples']
+            'auc': auc,
+            'n_samples': n_samples,
+            'n_resistant': n_resistant,
+            'n_susceptible': n_susceptible,
+            'prevalence': prevalence
         })
 
-    df = pd.DataFrame(summary)
+    df = pd.DataFrame(summary, columns=['drug', 'auc', 'n_samples', 'n_resistant', 'n_susceptible', 'prevalence'])
 
-    # Add summary row
+    if df.empty:
+        # Return an empty DataFrame with expected columns rather than failing
+        return df
+
+    # Compute aggregated "MEAN" row safely
+    valid_auc = df['auc'].dropna()
+    mean_auc = valid_auc.mean() if not valid_auc.empty else np.nan
+    total_n_samples = int(df['n_samples'].sum()) if 'n_samples' in df.columns else 0
+    total_n_resistant = int(df['n_resistant'].sum()) if 'n_resistant' in df.columns else 0
+    total_n_susceptible = int(df['n_susceptible'].sum()) if 'n_susceptible' in df.columns else 0
+    mean_prevalence = (total_n_resistant / total_n_samples) if total_n_samples > 0 else np.nan
+
     mean_row = pd.DataFrame([{
         'drug': 'MEAN',
-        'auc': df['auc'].mean(),
-        'n_samples': df['n_samples'].sum(),
-        'n_resistant': df['n_resistant'].sum(),
-        'n_susceptible': df['n_susceptible'].sum(),
-        'prevalence': df['n_resistant'].sum() / df['n_samples'].sum()
+        'auc': mean_auc,
+        'n_samples': total_n_samples,
+        'n_resistant': total_n_resistant,
+        'n_susceptible': total_n_susceptible,
+        'prevalence': mean_prevalence
     }])
 
     df = pd.concat([df, mean_row], ignore_index=True)

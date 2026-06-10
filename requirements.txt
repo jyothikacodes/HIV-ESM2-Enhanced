@@ -1,33 +1,19 @@
-# HIV-ESM-2: Protein Language Model Embeddings for HIV Drug Resistance Prediction
-# Python 3.12 required (3.14 not yet supported by PyTorch)
-
-# Core ML/DL
-torch>=2.2.0
-numpy>=1.24.0,<2.0
+torch>=1.12.0
+fair-esm>=2.0.0
 scikit-learn>=1.3.0
 xgboost>=1.7.0
-scipy>=1.10.0
-
-# Protein language models
-# ESM-2 and ESM-1v loaded via torch.hub (facebookresearch/esm) — no pip install needed
-esm>=3.0.0               # ESM C / Cambrian (EvolutionaryScale) — for revision W6
-
-# Data processing
+shap>=0.42.0
 pandas>=2.0.0
-biopython>=1.81
-tqdm>=4.65.0
-
-# Visualization
+numpy>=1.24.0
+scipy>=1.10.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
-
-# Export
-openpyxl>=3.1.0
-
-# Interpretability
-shap>=0.42.0
-
-# Notebooks
+biopython>=1.81
+tqdm>=4.65.0
 jupyter>=1.0.0
+
+# Optional / repository-specific extras
+esm>=3.0.0  # required for ESM C / ESM-1v imports in this repo
+openpyxl>=3.1.0
 ipywidgets>=8.0.0
 ipykernel

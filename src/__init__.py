@@ -18,3 +18,12 @@ from . import models
 from . import evaluation
 from . import visualization
 from . import interpretability
+from . import rare_mutations
+from . import temporal_validation
+from . import ternary_classification
+from . import shap_explainability
+from . import calibration
+from . import dual_shap_explainability
+from . import counterfactual_mutation_analysis
+from . import option_b_evaluation
+

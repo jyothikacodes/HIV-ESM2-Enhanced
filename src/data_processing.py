@@ -12,7 +12,6 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from Bio import SeqIO
 
 
 # Drug lists by class
@@ -75,6 +74,14 @@ def load_fasta(filepath: Path) -> Tuple[List[str], List[str]]:
     Returns:
         Tuple of (sequences, sequence_ids)
     """
+    try:
+        from Bio import SeqIO
+    except ImportError as exc:
+        raise ImportError(
+            "Biopython is required to load FASTA files. "
+            "Install it with `pip install biopython` or add it to your environment."
+        ) from exc
+
     sequences = []
     seq_ids = []
 
@@ -139,6 +146,55 @@ def parse_hivdb_sequences(
         df = df[(df['seq_length'] >= min_length) & (df['seq_length'] <= max_length)]
 
     return df
+
+
+HIV_PROTEASE_REFERENCE = (
+    "PQITLWQRPLVTIKIGGQLKEALLDTGADDTVLEEMSLPGRWKPKMIGGIGGFIKVRQYD"
+    "QILIEICGHKAIGTVLVGPTPVNIIGRNLLTQIGCTLNF"
+)
+
+HIV_RT_REFERENCE = (
+    "PISPIETVPVKLKPGMDGPKVKQWPLTEEKIKALVEICTEMEKEGKISKIGPENPYNTPV"
+    "FAIKKKDSTKWRKLVDFRELNKRTQDFWEVQLGIPHPAGLKKKKSVTVLDVGDAYFSVPL"
+    "DEDFRKYTAFTIPSINNETPGIRYQYNVLPQGWKGSPAIFQSSMTKILEPFRKQNPDIVI"
+    "YQYMDDLYVGSDLEIGQHRTKIEELRQHLLRWGFTTPDKKHQKEPPFLWMGYELHPDKWT"
+)
+
+
+def reconstruct_sequences_from_positions(
+    df: pd.DataFrame,
+    reference: str,
+    position_prefix: str = 'P'
+) -> List[str]:
+    """
+    Reconstruct amino acid sequences from position columns in HIVDB genopheno files.
+
+    Args:
+        df: DataFrame with position columns (e.g. P1, P2, ...)
+        reference: Reference amino acid sequence
+        position_prefix: Prefix for position columns
+
+    Returns:
+        List of reconstructed sequences
+    """
+    pos_cols = sorted(
+        [c for c in df.columns if c.startswith(position_prefix)
+         and c[len(position_prefix):].isdigit()],
+        key=lambda c: int(c[len(position_prefix):])
+    )
+
+    ref_len = min(len(reference), len(pos_cols))
+    sequences = []
+
+    for _, row in df.iterrows():
+        seq = list(reference[:ref_len])
+        for i, col in enumerate(pos_cols[:ref_len]):
+            aa = row[col]
+            if isinstance(aa, str) and aa != '-' and len(aa) == 1 and aa.isalpha():
+                seq[i] = aa
+        sequences.append(''.join(seq))
+
+    return sequences
 
 
 def extract_resistance_labels(

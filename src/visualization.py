@@ -51,9 +51,24 @@ def plot_roc_curves(
 
     for idx, (drug, res) in enumerate(results.items()):
         ax = axes[idx]
+        # Skip or annotate drugs without predictions
+        if not isinstance(res, dict) or 'y_true' not in res or 'y_pred' not in res:
+            ax.text(0.5, 0.5, 'No predictions', ha='center', va='center', fontsize=12)
+            ax.set_title(f'{drug} (skipped)')
+            ax.set_xlim([0, 1])
+            ax.set_ylim([0, 1])
+            continue
 
-        fpr, tpr, _ = roc_curve(res['y_true'], res['y_pred'])
-        auc = res['auc']
+        try:
+            fpr, tpr, _ = roc_curve(res['y_true'], res['y_pred'])
+        except Exception:
+            ax.text(0.5, 0.5, 'Insufficient data', ha='center', va='center', fontsize=12)
+            ax.set_title(f'{drug} (insufficient)')
+            ax.set_xlim([0, 1])
+            ax.set_ylim([0, 1])
+            continue
+
+        auc = res.get('auc', np.nan)
 
         ax.plot(fpr, tpr, 'b-', linewidth=2, label=f'AUC = {auc:.3f}')
         ax.plot([0, 1], [0, 1], 'k--', alpha=0.5)

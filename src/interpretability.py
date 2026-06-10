@@ -441,7 +441,12 @@ def compute_shap_values(
     X_background = X[bg_idx]
 
     # Create explainer
-    explainer = shap.TreeExplainer(model) if hasattr(model, 'feature_importances_') else shap.KernelExplainer(model.predict_proba, X_background)
+    if hasattr(model, 'feature_importances_'):
+        explainer = shap.TreeExplainer(model)
+    elif hasattr(model, 'coef_'):
+        explainer = shap.LinearExplainer(model, X_background)
+    else:
+        explainer = shap.KernelExplainer(model.predict_proba, X_background)
 
     # Compute SHAP values
     shap_values = explainer.shap_values(X)
