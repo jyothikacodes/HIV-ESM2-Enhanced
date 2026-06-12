@@ -1,4 +1,4 @@
-# HIV-ESM2-Enhanced — Publication-ready repository
+# HIV-ESM2-Enhanced
 
 This repository implements reproducible methods for predicting HIV drug resistance using ESM-2 protein language model embeddings and downstream classifiers. The project is organized and documented for journal publication, reproducibility review, and external collaboration.
 
