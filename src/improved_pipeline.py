@@ -46,8 +46,10 @@ from .models import (
     EmbeddingDataset,
     collate_embeddings,
     train_attention_model,
+    train_multihead_attention_model,
 )
 from .rare_mutations import (
+    compute_drm_position_features,
     compute_mutation_frequencies,
     compute_rare_mutation_summary_features,
     compute_rare_mutation_weights,
@@ -229,13 +231,20 @@ def extract_attention_pooled_vectors(
                 batch_rw = None
             batch_emb = batch_emb.to(device)
             batch_mask = batch_mask.to(device)
-            scores = model.attention(batch_emb).squeeze(-1)
-            scores = scores.masked_fill(batch_mask == 0, -1e9)
-            weights = torch.softmax(scores, dim=1)
-            if batch_rw is not None:
-                weights = weights * batch_rw
-                weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-9)
-            pooled = torch.bmm(weights.unsqueeze(1), batch_emb).squeeze(1)
+            if hasattr(model, 'extract_pooled_vectors'):
+                pooled = model.extract_pooled_vectors(
+                    batch_emb,
+                    mask=batch_mask,
+                    rare_mutation_weights=batch_rw,
+                )
+            else:
+                scores = model.attention(batch_emb).squeeze(-1)
+                scores = scores.masked_fill(batch_mask == 0, -1e9)
+                weights = torch.softmax(scores, dim=1)
+                if batch_rw is not None:
+                    weights = weights * batch_rw
+                    weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-9)
+                pooled = torch.bmm(weights.unsqueeze(1), batch_emb).squeeze(1)
             pooled_vectors.append(pooled.cpu().numpy())
 
     return np.vstack(pooled_vectors)
@@ -248,6 +257,9 @@ def cv_attention_predictions(
     n_splits: int = 5,
     random_state: int = 42,
     epochs: int = 20,
+    use_multihead: bool = False,
+    n_heads: int = 4,
+    attention_dropout: float = 0.1,
     return_pooled: bool = False,
 ) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """Out-of-fold attention model predictions (and optional pooled features)."""
@@ -271,17 +283,33 @@ def cv_attention_predictions(
         rw_train = [rare_weights_list[i] for i in train_idx] if rare_weights_list else None
         rw_val = [rare_weights_list[i] for i in val_idx] if rare_weights_list else None
 
-        model = train_attention_model(
-            x_train,
-            y_train,
-            val_embeddings_list=x_val,
-            val_labels=y[val_idx],
-            rare_mutation_weights_list=rw_train,
-            val_rare_mutation_weights_list=rw_val,
-            input_dim=input_dim,
-            epochs=epochs,
-            verbose=False,
-        )
+        if use_multihead:
+            model = train_multihead_attention_model(
+                x_train,
+                y_train,
+                val_embeddings_list=x_val,
+                val_labels=y[val_idx],
+                rare_mutation_weights_list=rw_train,
+                val_rare_mutation_weights_list=rw_val,
+                input_dim=input_dim,
+                attention_dim=input_dim if input_dim < 256 else 256,
+                n_heads=n_heads,
+                dropout=attention_dropout,
+                epochs=epochs,
+                verbose=False,
+            )
+        else:
+            model = train_attention_model(
+                x_train,
+                y_train,
+                val_embeddings_list=x_val,
+                val_labels=y[val_idx],
+                rare_mutation_weights_list=rw_train,
+                val_rare_mutation_weights_list=rw_val,
+                input_dim=input_dim,
+                epochs=epochs,
+                verbose=False,
+            )
         model.eval()
         val_dataset = EmbeddingDataset(x_val, y[val_idx], rare_mutation_weights_list=rw_val)
         val_loader = DataLoader(val_dataset, batch_size=32, collate_fn=collate_embeddings)
@@ -338,7 +366,10 @@ def build_fusion_features(
         tau=rare_tau,
         frequencies=frequencies,
     )
-    return np.hstack([mean_feat, max_feat, attention_pooled, rare_feat]).astype(np.float32)
+    parts = [mean_feat, max_feat, attention_pooled, rare_feat]
+    if drm_features is not None:
+        parts.append(drm_features.astype(np.float32))
+    return np.hstack(parts).astype(np.float32)
 
 
 def scale_features(X: np.ndarray) -> np.ndarray:
@@ -550,6 +581,61 @@ def ensemble_soft_vote_cv(
         ensemble_pred += weights[model_type] * preds
 
     return ensemble_pred, weights
+
+
+def stacked_ensemble_cv(
+    X: np.ndarray,
+    y: np.ndarray,
+    model_types: Optional[List[str]] = None,
+    params_per_model: Optional[Dict[str, Dict]] = None,
+    n_splits: int = 5,
+    random_state: int = 42,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Stacked meta-learner ensemble using OOF base predictions."""
+    model_types = list(model_types or ENSEMBLE_MODELS)
+    if not HAS_LIGHTGBM and 'lightgbm' in model_types:
+        model_types.remove('lightgbm')
+
+    splits = _effective_splits(y, n_splits)
+    if splits < 2:
+        return np.full(len(y), np.nan), {'meta_weights': {}, 'oof_preds': {}}
+
+    cv = StratifiedKFold(n_splits=splits, shuffle=True, random_state=random_state)
+    oof_preds = {m: np.zeros(len(y)) for m in model_types}
+
+    for train_idx, val_idx in cv.split(X, y):
+        for model_type in model_types:
+            params = (params_per_model or {}).get(model_type, {})
+            model, scaler = _fit_classifier(
+                model_type,
+                X[train_idx],
+                y[train_idx],
+                params=params,
+                X_val=X[val_idx],
+                y_val=y[val_idx],
+                random_state=random_state,
+            )
+            oof_preds[model_type][val_idx] = _predict_classifier(
+                model_type, model, scaler, X[val_idx]
+            )
+
+    stacked_features = np.vstack([oof_preds[m] for m in model_types]).T
+    meta_scaler = StandardScaler()
+    stacked_scaled = meta_scaler.fit_transform(stacked_features)
+    meta_model = LogisticRegression(
+        max_iter=2000,
+        class_weight='balanced',
+        random_state=random_state,
+    )
+    meta_model.fit(stacked_scaled, y)
+    ensemble_pred = meta_model.predict_proba(stacked_scaled)[:, 1]
+
+    return ensemble_pred, {
+        'meta_model': meta_model,
+        'meta_scaler': meta_scaler,
+        'oof_preds': oof_preds,
+        'model_types': model_types,
+    }
 
 
 def shap_feature_selection(
@@ -996,11 +1082,32 @@ def evaluate_drug_improved(
     )
     modality_df = compare_feature_modalities(x_list, seq_valid, reference, y, norm_weights, random_state=seed)
 
+    use_multihead = config.get('use_multihead_attention', False)
+    n_heads = config.get('attention_n_heads', 4)
+    attention_dropout = config.get('attention_dropout', 0.1)
     _, attn_pooled = cv_attention_predictions(
-        x_list, y, rare_weights_list=norm_weights, random_state=seed, return_pooled=True
+        x_list,
+        y,
+        rare_weights_list=norm_weights,
+        random_state=seed,
+        use_multihead=use_multihead,
+        n_heads=n_heads,
+        attention_dropout=attention_dropout,
+        return_pooled=True,
+    )
+    drm_features = compute_drm_position_features(
+        seq_valid,
+        reference,
+        drug_class,
+        frequencies=freqs,
     )
     fusion_x = build_fusion_features(
-        x_list, seq_valid, reference, attention_pooled=attn_pooled, frequencies=freqs
+        x_list,
+        seq_valid,
+        reference,
+        attention_pooled=attn_pooled,
+        frequencies=freqs,
+        drm_features=drm_features,
     )
     fusion_scaled = scale_features(fusion_x)
 
@@ -1041,12 +1148,21 @@ def evaluate_drug_improved(
     )
 
     xgb_params = nested.get('best_params') or {}
-    ensemble_pred, ensemble_weights = ensemble_soft_vote_cv(
-        fusion_scaled,
-        y,
-        params_per_model={'xgboost': xgb_params},
-        random_state=seed,
-    )
+    if config.get('use_stacked_ensemble', True):
+        ensemble_pred, ensemble_meta = stacked_ensemble_cv(
+            fusion_scaled,
+            y,
+            params_per_model={'xgboost': xgb_params},
+            random_state=seed,
+        )
+        ensemble_weights = {'stacked_meta': 1.0}
+    else:
+        ensemble_pred, ensemble_weights = ensemble_soft_vote_cv(
+            fusion_scaled,
+            y,
+            params_per_model={'xgboost': xgb_params},
+            random_state=seed,
+        )
 
     drug_pheno = phenotypes.iloc[valid_mask].copy()
     calibration_result = apply_oof_calibration(y, ensemble_pred, random_state=seed)

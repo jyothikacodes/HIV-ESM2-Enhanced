@@ -87,6 +87,85 @@ class AttentionWeightedClassifier(nn.Module):
         
         return logits, weights
 
+    def extract_pooled_vectors(
+        self,
+        x,
+        mask=None,
+        rare_mutation_weights=None,
+    ) -> torch.Tensor:
+        """Return the attention-pooled embedding vector(s) without classification."""
+        scores = self.attention(x).squeeze(-1)
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, -1e9)
+        weights = F.softmax(scores, dim=1)
+        if rare_mutation_weights is not None:
+            weights = weights * rare_mutation_weights
+            weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-9)
+        pooled = torch.bmm(weights.unsqueeze(1), x).squeeze(1)
+        return pooled
+
+
+class MultiHeadAttentionPoolingClassifier(nn.Module):
+    """Multi-head attention pooling followed by a projection and classifier."""
+    def __init__(
+        self,
+        input_dim: int = 1280,
+        attention_hidden_dim: int = 256,
+        n_heads: int = 4,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.n_heads = n_heads
+        self.attention_heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(input_dim, attention_hidden_dim),
+                nn.Tanh(),
+                nn.Linear(attention_hidden_dim, 1),
+            )
+            for _ in range(n_heads)
+        ])
+        self.attention_dropout = nn.Dropout(dropout)
+        self.project = nn.Linear(n_heads * input_dim, input_dim)
+        self.classifier = nn.Linear(input_dim, 1)
+
+    def forward(self, x, mask=None, rare_mutation_weights=None):
+        """Return logits and attention weights for each head."""
+        raw_scores = torch.stack(
+            [head(x).squeeze(-1) for head in self.attention_heads], dim=-1
+        )
+        if mask is not None:
+            raw_scores = raw_scores.masked_fill(mask.unsqueeze(-1) == 0, -1e9)
+        weights = F.softmax(raw_scores, dim=1)
+        if rare_mutation_weights is not None:
+            weights = weights * rare_mutation_weights.unsqueeze(-1)
+            weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-9)
+        weights = self.attention_dropout(weights)
+        pooled = torch.einsum('bsh,bsd->bhd', weights, x)
+        pooled = pooled.view(pooled.size(0), -1)
+        pooled = self.project(pooled)
+        logits = self.classifier(pooled)
+        return logits, weights
+
+    def extract_pooled_vectors(
+        self,
+        x,
+        mask=None,
+        rare_mutation_weights=None,
+    ) -> torch.Tensor:
+        raw_scores = torch.stack(
+            [head(x).squeeze(-1) for head in self.attention_heads], dim=-1
+        )
+        if mask is not None:
+            raw_scores = raw_scores.masked_fill(mask.unsqueeze(-1) == 0, -1e9)
+        weights = F.softmax(raw_scores, dim=1)
+        if rare_mutation_weights is not None:
+            weights = weights * rare_mutation_weights.unsqueeze(-1)
+            weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-9)
+        pooled = torch.einsum('bsh,bsd->bhd', weights, x)
+        pooled = pooled.view(pooled.size(0), -1)
+        pooled = self.project(pooled)
+        return pooled
+
 
 class EmbeddingDataset(Dataset):
     """Dataset for variable-length embeddings with optional rare mutation weights."""
@@ -275,6 +354,129 @@ def train_attention_model(
             
             val_auc = roc_auc_score(val_labels, val_probs)
 
+            if val_auc > best_val_auc:
+                best_val_auc = val_auc
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter >= early_stopping_patience:
+                if verbose:
+                    print(f"Early stopping at epoch {epoch + 1}")
+                break
+
+            if verbose:
+                print(f"Epoch {epoch+1}/{epochs} - Loss: {train_loss/len(train_loader):.4f} - Val AUC: {val_auc:.4f}")
+        else:
+            if verbose:
+                print(f"Epoch {epoch+1}/{epochs} - Loss: {train_loss/len(train_loader):.4f}")
+
+    if has_validation and best_state is not None:
+        model.load_state_dict(best_state)
+
+    return model
+
+
+def train_multihead_attention_model(
+    embeddings_list: List[np.ndarray],
+    labels: np.ndarray,
+    val_embeddings_list: Optional[List[np.ndarray]] = None,
+    val_labels: Optional[np.ndarray] = None,
+    rare_mutation_weights_list: Optional[List[np.ndarray]] = None,
+    val_rare_mutation_weights_list: Optional[List[np.ndarray]] = None,
+    input_dim: int = 1280,
+    attention_dim: int = 256,
+    n_heads: int = 4,
+    dropout: float = 0.1,
+    batch_size: int = 32,
+    epochs: int = 20,
+    lr: float = 1e-4,
+    early_stopping_patience: int = 5,
+    device: Optional[torch.device] = None,
+    verbose: bool = False,
+) -> MultiHeadAttentionPoolingClassifier:
+    """Train a multi-head attention pooling classifier."""
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    train_dataset = EmbeddingDataset(
+        embeddings_list, labels,
+        rare_mutation_weights_list=rare_mutation_weights_list,
+    )
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=collate_embeddings,
+    )
+    use_rare_weights = rare_mutation_weights_list is not None
+
+    model = MultiHeadAttentionPoolingClassifier(
+        input_dim=input_dim,
+        attention_hidden_dim=attention_dim,
+        n_heads=n_heads,
+        dropout=dropout,
+    ).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.BCEWithLogitsLoss()
+
+    best_val_auc = -1.0
+    best_state = None
+    patience_counter = 0
+    has_validation = val_embeddings_list is not None and val_labels is not None
+
+    for epoch in range(epochs):
+        model.train()
+        train_loss = 0.0
+
+        for batch_data in train_loader:
+            if use_rare_weights and len(batch_data) == 4:
+                batch_emb, batch_y, batch_mask, batch_rw = batch_data
+                batch_rw = batch_rw.to(device)
+            else:
+                batch_emb, batch_y, batch_mask = batch_data[:3]
+                batch_rw = None
+
+            batch_emb = batch_emb.to(device)
+            batch_y = batch_y.to(device).unsqueeze(1)
+            batch_mask = batch_mask.to(device)
+
+            optimizer.zero_grad()
+            logits, _ = model(batch_emb, batch_mask, rare_mutation_weights=batch_rw)
+            loss = criterion(logits, batch_y)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+
+        if has_validation:
+            model.eval()
+            val_dataset = EmbeddingDataset(
+                val_embeddings_list, val_labels,
+                rare_mutation_weights_list=val_rare_mutation_weights_list,
+            )
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                collate_fn=collate_embeddings,
+            )
+            val_use_rw = val_rare_mutation_weights_list is not None
+            val_probs = []
+            with torch.no_grad():
+                for val_batch in val_loader:
+                    if val_use_rw and len(val_batch) == 4:
+                        v_emb, _, v_mask, v_rw = val_batch
+                        v_rw = v_rw.to(device)
+                    else:
+                        v_emb, _, v_mask = val_batch[:3]
+                        v_rw = None
+                    v_emb = v_emb.to(device)
+                    v_mask = v_mask.to(device)
+                    logits, _ = model(v_emb, v_mask, rare_mutation_weights=v_rw)
+                    val_probs.extend(torch.sigmoid(logits).cpu().numpy())
+
+            val_auc = roc_auc_score(val_labels, np.array(val_probs).flatten())
             if val_auc > best_val_auc:
                 best_val_auc = val_auc
                 best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
