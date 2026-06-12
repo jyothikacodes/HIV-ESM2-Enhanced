@@ -16,9 +16,14 @@ We used genotype-phenotype datasets from the Stanford HIV Drug Resistance Databa
 
 ### 1.2 Resistance Labels
 
-Phenotypic drug resistance was defined using HIVDB's binary classification:
-- **Susceptible (0)**: Normal susceptibility to the drug
-- **Resistant (1)**: Reduced susceptibility (fold-change ≥ clinical cutoff)
+Phenotypic drug resistance was evaluated using two main classification schemes based on Fold-Change (FC) cutoffs:
+- **Binary Classification**:
+  - **Susceptible (0)**: Normal susceptibility (FC < clinical cutoff, e.g., 2.5)
+  - **Resistant (1)**: Reduced susceptibility (FC ≥ clinical cutoff)
+- **Ternary (3-class) Classification**:
+  - **Susceptible (0)**: FC < 2.5
+  - **Intermediate (1)**: 2.5 ≤ FC < 10.0
+  - **Resistant (2)**: FC ≥ 10.0
 
 ### 1.3 Quality Filtering
 
@@ -112,6 +117,16 @@ Logistic regression with L2 regularization:
 
 Logistic regression was preferred over XGBoost for ESM-2 embeddings as the dense, continuous features are better suited to linear models.
 
+### 3.5 Attention Modulation via Rare Mutation Weighting
+
+To enhance model sensitivity to rare mutations that might otherwise be overlooked in dense pooled representations, a rarity-weighted attention mechanism was developed:
+1. Compute per-position amino acid frequencies $f(a_i)$ across the entire cohort.
+2. Generate rarity-based weight vectors $w_i = 1 / f(a_i)$.
+3. Apply normalization (softmax, log, or rank-based) to the weights for stability.
+4. Scale the model's learned attention scores using the rare mutation weights:
+   $$\text{Attention}_{\text{final}} = \text{softmax}(\text{Attention}_{\text{raw}} \times w)$$
+5. This guides the pooling layer to prioritize low-frequency, highly informative resistance positions.
+
 ## 4. Interpretability Analysis
 
 ### 4.1 Attention Weight Extraction
@@ -154,8 +169,31 @@ Positions with high attention differential but NOT in current DRM lists were ide
 2. Select top-30 positions
 3. Exclude known DRM positions
 4. Record remaining as "novel"
-
 **Results:** 228 unique novel positions identified across all drugs
+
+### 4.4 Dual SHAP Explainability Framework
+
+To capture both residue-level structural context and mutation-level clinical attribution, we fuse two distinct SHAP channels:
+1. **Attention-Aligned Residue SHAP**: Attention weights scaled by L2 embedding norms are passed to a surrogate model for residue attribution.
+2. **Mutation-Level SHAP**: SHAP values are computed directly on a binary mutation indicator matrix.
+3. **Consensus Fusion**: Normalized attribution values are combined via a weighted sum:
+   $$\text{SHAP}_{\text{fused}} = 0.4 \times \text{SHAP}_{\text{residue}} + 0.6 \times \text{SHAP}_{\text{mutation}}$$
+Alignment is validated using Precision@K, Jaccard similarity, and hypergeometric tests.
+
+### 4.5 Unified Explainability Aggregator
+
+We aggregate three distinct channels of attribution into a robust residue-wise importance score:
+- **Integrated Gradients (IG)** (50% weight): Gradient-based path integral attribution from baseline to input.
+- **Learned Attention Weights** (30% weight): The model's internal attention focus during training.
+- **SHAP Proxy Projection** (20% weight): Projects global feature attributions back to residues.
+
+### 4.6 Counterfactual Mutation Causal Analysis
+
+We simulate mutational deletions to analyze their causal effect:
+1. Attenuate the embedding of position $p$ in sequence $S$ (multiply by 0.1) to simulate mutation removal.
+2. Measure the difference in prediction probability:
+   $$\Delta P = P(\text{counterfactual}) - P(\text{original})$$
+3. Rank positions and mutations by their mean absolute causal effect.
 
 ## 5. Validation Strategy
 
@@ -193,16 +231,34 @@ Probability calibration was assessed using:
 ECE = Σ (n_bin / n_total) × |accuracy_bin - confidence_bin|
 ```
 
-**Platt scaling** for post-hoc calibration:
-- Logistic regression on validation predictions
-- Reduces ECE from 0.071 to 0.040
+**Platt scaling and Isotonic regression** for post-hoc calibration:
+- Platt scaling (logistic regression on validation predictions) and isotonic regression are evaluated.
+- Auto-calibration selects the best method via internal cross-validation.
+- For ternary classification, probability calibration is performed using a One-vs-Rest (OvR) scaling strategy.
 
 ### 5.5 Bootstrap Confidence Intervals
 
 1000 bootstrap iterations:
 - Sample with replacement
-- Compute AUC for each sample
+- Compute AUC, accuracy, macro-F1, and calibration metrics for each sample
 - Report 95% CI as [2.5th percentile, 97.5th percentile]
+
+### 5.6 Temporal Holdout Validation
+
+To check model stability over time and simulate clinical deployment:
+- Order sequences chronologically (using sequence ID as proxy).
+- Train on the oldest 80% and validate on the newest 20% (temporal holdout).
+- Compare temporal performance drops against cross-validation results to detect temporal drift.
+
+### 5.7 Subtype & Robustness Stratification
+
+Models are evaluated separately on Subtype B vs non-B sequences using Hamming distance reference matching and Stanford Sierra API validation to assess model robustness across different HIV-1 subtypes.
+
+### 5.8 Multi-PLM Comparison
+
+We compare the performance of ESM-2 (esm2_t33_650M_UR50D) embeddings against:
+- **ESM-C (Cambrian)**: Meta's recommended successor model (600M parameters).
+- **ESM-1v**: Designed for zero-shot variant effect scoring.
 
 ## 6. Limitations
 

@@ -159,6 +159,7 @@ def train_attention_model(
     batch_size: int = 32,
     epochs: int = 20,
     lr: float = 1e-4,
+    early_stopping_patience: int = 5,
     device: Optional[torch.device] = None,
     verbose: bool = False
 ) -> AttentionWeightedClassifier:
@@ -179,6 +180,7 @@ def train_attention_model(
         batch_size: Batch size
         epochs: Number of training epochs
         lr: Learning rate
+        early_stopping_patience: Stop if validation AUC does not improve for this many epochs
         device: Torch device
         verbose: Print progress
         
@@ -207,9 +209,12 @@ def train_attention_model(
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.BCEWithLogitsLoss()
     
-    # Training loop
-    best_val_auc = 0
-    
+    # Training loop with early stopping on validation AUC
+    best_val_auc = -1.0
+    best_state = None
+    patience_counter = 0
+    has_validation = val_embeddings_list is not None and val_labels is not None
+
     for epoch in range(epochs):
         model.train()
         train_loss = 0
@@ -269,13 +274,28 @@ def train_attention_model(
                     val_probs.extend(probs)
             
             val_auc = roc_auc_score(val_labels, val_probs)
-            
+
+            if val_auc > best_val_auc:
+                best_val_auc = val_auc
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter >= early_stopping_patience:
+                if verbose:
+                    print(f"Early stopping at epoch {epoch + 1}")
+                break
+
             if verbose:
                 print(f"Epoch {epoch+1}/{epochs} - Loss: {train_loss/len(train_loader):.4f} - Val AUC: {val_auc:.4f}")
         else:
             if verbose:
                 print(f"Epoch {epoch+1}/{epochs} - Loss: {train_loss/len(train_loader):.4f}")
-                
+
+    if has_validation and best_state is not None:
+        model.load_state_dict(best_state)
+
     return model
 
 

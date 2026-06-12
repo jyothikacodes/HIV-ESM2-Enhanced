@@ -344,6 +344,50 @@ def isotonic_calibration(
     return iso.predict(y_pred_test)
 
 
+def temperature_scaling(
+    y_true_cal: np.ndarray,
+    y_pred_cal: np.ndarray,
+    y_pred_test: np.ndarray,
+    eps: float = 1e-9
+) -> np.ndarray:
+    """
+    Apply temperature scaling for binary probability calibration.
+
+    Fits a single temperature T on the calibration set by minimizing
+    negative log-likelihood, then rescales test logits.
+
+    Args:
+        y_true_cal: True labels for calibration set
+        y_pred_cal: Predicted probabilities for calibration set
+        y_pred_test: Predicted probabilities to calibrate
+        eps: Numerical stability constant
+
+    Returns:
+        Temperature-scaled probabilities for test set
+    """
+    from scipy.optimize import minimize_scalar
+
+    y_true_cal = np.asarray(y_true_cal, dtype=float)
+    y_pred_cal = np.clip(np.asarray(y_pred_cal, dtype=float), eps, 1.0 - eps)
+    y_pred_test = np.clip(np.asarray(y_pred_test, dtype=float), eps, 1.0 - eps)
+
+    logits_cal = np.log(y_pred_cal / (1.0 - y_pred_cal))
+
+    def nll(temperature: float) -> float:
+        scaled = 1.0 / (1.0 + np.exp(-logits_cal / max(temperature, eps)))
+        scaled = np.clip(scaled, eps, 1.0 - eps)
+        return -np.mean(
+            y_true_cal * np.log(scaled) + (1.0 - y_true_cal) * np.log(1.0 - scaled)
+        )
+
+    result = minimize_scalar(nll, bounds=(0.05, 20.0), method='bounded')
+    temperature = max(float(result.x), eps)
+
+    logits_test = np.log(y_pred_test / (1.0 - y_pred_test))
+    scaled_test = 1.0 / (1.0 + np.exp(-logits_test / temperature))
+    return np.clip(scaled_test, eps, 1.0 - eps)
+
+
 def compare_esm2_vs_baseline(
     esm2_results: Dict,
     baseline_results: Dict,

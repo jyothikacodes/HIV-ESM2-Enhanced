@@ -154,6 +154,62 @@ def compute_rare_mutation_mask(
     return masks
 
 
+def compute_rare_mutation_summary_features(
+    sequences: List[str],
+    reference: str,
+    tau: float = 0.05,
+    epsilon: float = 1e-6,
+    frequencies: Optional[np.ndarray] = None
+) -> np.ndarray:
+    """
+    Compute compact rare-mutation summary features for each sequence.
+
+    These features can be concatenated with ESM embeddings for downstream
+    classifiers and are designed to capture rare mutation burden and severity.
+
+    Returns:
+        Array of shape (n_sequences, 4) with columns:
+        - rare_mutation_count
+        - rare_mutation_fraction
+        - summed_inverse_frequency
+        - mean_inverse_frequency
+    """
+    if frequencies is None:
+        frequencies = compute_mutation_frequencies(sequences, reference)
+
+    seq_len = len(reference)
+    summary_features = []
+
+    for seq in sequences:
+        effective_len = min(len(seq), seq_len)
+        rare_count = 0
+        inverse_weights = []
+
+        for i in range(effective_len):
+            aa = seq[i]
+            if aa in AA_TO_IDX:
+                freq = frequencies[i, AA_TO_IDX[aa]]
+                inv_weight = 1.0 / (freq + epsilon)
+                inverse_weights.append(inv_weight)
+                if freq < tau and aa != reference[i]:
+                    rare_count += 1
+
+        total_mutations = sum(1 for i in range(effective_len)
+                              if seq[i] != reference[i] and seq[i] in AA_TO_IDX)
+        rare_fraction = rare_count / total_mutations if total_mutations > 0 else 0.0
+        summed_inverse = float(np.sum(inverse_weights)) if inverse_weights else 0.0
+        mean_inverse = float(np.mean(inverse_weights)) if inverse_weights else 0.0
+
+        summary_features.append([
+            rare_count,
+            rare_fraction,
+            summed_inverse,
+            mean_inverse
+        ])
+
+    return np.array(summary_features, dtype=np.float32)
+
+
 def get_rare_mutation_summary(
     sequences: List[str],
     reference: str,

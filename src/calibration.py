@@ -19,6 +19,7 @@ from sklearn.metrics import brier_score_loss, roc_auc_score
 from .evaluation import (
     platt_scaling,
     isotonic_calibration,
+    temperature_scaling,
     compute_calibration_metrics
 )
 
@@ -37,7 +38,7 @@ def calibrate_predictions(
         y_true_cal: Binary true labels for calibration set (n_samples_cal,)
         y_pred_cal: Raw predicted probabilities for calibration set (n_samples_cal,)
         y_pred_test: Raw predicted probabilities to be calibrated (n_samples_test,)
-        method: Calibration method ('platt', 'isotonic', or 'auto')
+        method: Calibration method ('platt', 'isotonic', 'temperature', or 'auto')
 
     Returns:
         Calibrated probabilities for the test set
@@ -51,6 +52,8 @@ def calibrate_predictions(
         return platt_scaling(y_true_cal, y_pred_cal, y_pred_test)
     elif method == 'isotonic':
         return isotonic_calibration(y_true_cal, y_pred_cal, y_pred_test)
+    elif method == 'temperature':
+        return temperature_scaling(y_true_cal, y_pred_cal, y_pred_test)
     elif method == 'auto':
         # Select best method using cross-validation on the calibration set
         # Since the calibration set might be small, we default to 3-fold CV
@@ -107,7 +110,7 @@ def calibrate_ternary_predictions(
         y_true_cal: True labels (0, 1, 2) for calibration set
         y_pred_proba_cal: Predicted class probabilities (n_samples_cal, 3)
         y_pred_proba_test: Predicted class probabilities to calibrate (n_samples_test, 3)
-        method: Calibration method ('platt', 'isotonic', or 'auto')
+        method: Calibration method ('platt', 'isotonic', 'temperature', or 'auto')
 
     Returns:
         Calibrated class probabilities of shape (n_samples_test, 3)
@@ -225,7 +228,7 @@ def calibrate_per_drug(
 
     Args:
         results: Dictionary containing per-drug evaluation results (e.g. from per_drug_training)
-        method: Calibration method ('platt', 'isotonic', or 'auto')
+        method: Calibration method ('platt', 'isotonic', 'temperature', or 'auto')
         n_splits: Number of splits for out-of-fold calibration
         random_state: Random state for reproducibility
 
