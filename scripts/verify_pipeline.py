@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 
 # Add the workspace to python path
-sys.path.insert(0, r"c:\Users\jyoth\hiv\HIV-ESM-2")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 print("--- Test 1: Verify existing pipeline imports ---")
 try:

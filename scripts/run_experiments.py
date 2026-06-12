@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 
 # Add workspace to path
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Import modules from src
 from src.data_processing import (

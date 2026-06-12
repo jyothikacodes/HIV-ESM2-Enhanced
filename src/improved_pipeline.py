@@ -137,7 +137,10 @@ def load_cohort_for_improved_pipeline(
         if sub_data:
             return sub_data
 
-    from run_experiments import select_and_extract_subsampled_data
+    try:
+        from scripts.run_experiments import select_and_extract_subsampled_data
+    except ImportError:
+        from run_experiments import select_and_extract_subsampled_data
     return select_and_extract_subsampled_data(data_dir, subset_size, seed)
 
 

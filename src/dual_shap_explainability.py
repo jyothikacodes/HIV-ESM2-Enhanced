@@ -272,7 +272,10 @@ def run_dual_shap_pipeline(
     """
     # Force resolve local imports
     sys.path.insert(0, str(Path(data_dir).resolve().parent))
-    from run_experiments import select_and_extract_subsampled_data
+    try:
+        from scripts.run_experiments import select_and_extract_subsampled_data
+    except ImportError:
+        from run_experiments import select_and_extract_subsampled_data
     from src.models import train_attention_model
     from src.interpretability import get_drug_specific_drms
     

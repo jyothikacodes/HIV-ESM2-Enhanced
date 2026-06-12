@@ -40,7 +40,7 @@ data = {
     })
 }
 
-results_dir = Path('results')
+results_dir = Path(__file__).resolve().parent.parent / 'results'
 results_dir.mkdir(exist_ok=True)
 
 for filename, df in data.items():
