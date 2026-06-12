@@ -65,6 +65,7 @@ def test_fusion_includes_rare_mutation_features():
 
 def test_multihead_attention_pooling_classifier():
     model = MultiHeadAttentionPoolingClassifier(input_dim=16, attention_hidden_dim=8, n_heads=3, dropout=0.2)
+    model.eval()
     x = torch.randn(4, 12, 16)
     mask = torch.ones(4, 12)
     logits, weights = model(x, mask)
@@ -108,9 +109,38 @@ def test_ensemble_and_calibration():
     assert len(applied['y_pred_calibrated']) == len(y)
 
 
+def test_integration_pipeline_with_drm_features():
+    per_residue, sequences, y = _synthetic_cohort(n=50, embed_dim=16, seq_len=20)
+    # Compute DRM position features
+    drm_features = compute_drm_position_features(sequences, HIV_PROTEASE_REFERENCE[:20], 'PI')
+    
+    # Check shape of drm features
+    assert drm_features.shape[0] == len(sequences)
+    
+    # Generate fusion features with drm_features
+    attn = np.random.randn(len(per_residue), 16).astype(np.float32)
+    fusion = build_fusion_features(
+        per_residue,
+        sequences,
+        HIV_PROTEASE_REFERENCE[:20],
+        attention_pooled=attn,
+        drm_features=drm_features
+    )
+    
+    expected_dim = 16 * 2 + 16 + 4 + drm_features.shape[1]
+    assert fusion.shape[1] == expected_dim
+    
+    # Run stacked ensemble and ensure it doesn't leak or error
+    preds, info = stacked_ensemble_cv(fusion, y, n_splits=3)
+    assert preds.shape == (50,)
+    assert np.all((preds >= 0) & (preds <= 1))
+    assert 'meta_model' in info
+
+
 if __name__ == '__main__':
     test_temperature_scaling()
     test_fusion_includes_rare_mutation_features()
     test_pooling_and_nested_cv()
     test_ensemble_and_calibration()
+    test_integration_pipeline_with_drm_features()
     print('Improved pipeline synthetic tests passed.')

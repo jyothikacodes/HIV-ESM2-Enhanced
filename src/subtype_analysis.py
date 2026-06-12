@@ -21,52 +21,13 @@ from sklearn.model_selection import StratifiedKFold
 
 from .data_processing import (
     PI_DRUGS, NRTI_DRUGS, NNRTI_DRUGS,
-    get_drug_class
+    get_drug_class,
+    reconstruct_sequences_from_positions
 )
 from .feature_engineering import HIV_PROTEASE_REFERENCE, HIV_RT_REFERENCE
 
 
 # ── Sequence reconstruction ─────────────────────────────────────────────────
-
-def reconstruct_sequences_from_positions(
-    df: pd.DataFrame,
-    reference: str,
-    position_prefix: str = 'P'
-) -> List[str]:
-    """
-    Reconstruct full amino acid sequences from HIVDB position columns.
-
-    In the HIVDB genopheno files, each position column (P1, P2, ..., Pn)
-    contains either '-' (matches reference) or the mutant amino acid.
-    We substitute mutant positions into the reference to recover the full sequence.
-
-    Args:
-        df: DataFrame with position columns (P1, P2, ..., Pn)
-        reference: Reference sequence (HXB2)
-        position_prefix: Column prefix for position columns
-
-    Returns:
-        List of reconstructed amino acid sequences
-    """
-    # Identify position columns
-    pos_cols = sorted(
-        [c for c in df.columns if c.startswith(position_prefix)
-         and c[len(position_prefix):].isdigit()],
-        key=lambda c: int(c[len(position_prefix):])
-    )
-    n_positions = len(pos_cols)
-    ref_len = min(len(reference), n_positions)
-
-    sequences = []
-    for _, row in df.iterrows():
-        seq = list(reference[:ref_len])
-        for i, col in enumerate(pos_cols[:ref_len]):
-            aa = row[col]
-            if isinstance(aa, str) and aa != '-' and len(aa) == 1 and aa.isalpha():
-                seq[i] = aa
-        sequences.append(''.join(seq))
-
-    return sequences
 
 
 def reconstruct_all_datasets(

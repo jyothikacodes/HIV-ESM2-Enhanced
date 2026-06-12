@@ -20,12 +20,9 @@ from scipy import stats
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
-    accuracy_score,
     average_precision_score,
     confusion_matrix,
     f1_score,
-    precision_score,
-    recall_score,
     roc_auc_score,
     roc_curve,
     precision_recall_curve,
@@ -47,6 +44,13 @@ from .models import (
     collate_embeddings,
     train_attention_model,
     train_multihead_attention_model,
+)
+from .improved_models_v2 import (
+    ImprovedMultiHeadAttentionPoolingClassifier,
+    RegularizedAttentionWeightedClassifier,
+    _fit_classifier_improved,
+    _predict_classifier_improved,
+    get_dropout_schedule,
 )
 from .rare_mutations import (
     compute_drm_position_features,
@@ -257,12 +261,20 @@ def cv_attention_predictions(
     n_splits: int = 5,
     random_state: int = 42,
     epochs: int = 20,
-    use_multihead: bool = False,
+    use_multihead: bool = True,  # CHANGE: Default to multihead (IMPROVEMENT 1)
     n_heads: int = 4,
-    attention_dropout: float = 0.1,
+    attention_dropout: float = 0.2,  # CHANGE: Increased default dropout (IMPROVEMENT 3)
     return_pooled: bool = False,
+    drug_class: str = None,  # NEW: For per-drug dropout scheduling
 ) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
-    """Out-of-fold attention model predictions (and optional pooled features)."""
+    """
+    Out-of-fold attention model predictions with PHASE 5 improvements.
+    
+    IMPROVEMENTS:
+    1. use_multihead=True: Multi-head attention instead of single head
+    2. attention_dropout increased: Better regularization for overfitting
+    3. drug_class parameter: Per-drug dropout scheduling for NNRTI
+    """
     splits = _effective_splits(y, n_splits)
     if splits < 2:
         nan = np.full(len(y), np.nan)
@@ -275,6 +287,10 @@ def cv_attention_predictions(
     cv = StratifiedKFold(n_splits=splits, shuffle=True, random_state=random_state)
     y_pred = np.zeros(len(y))
     pooled_features = np.zeros((len(y), input_dim), dtype=np.float32)
+    
+    # IMPROVEMENT 3: Per-drug dropout scheduling
+    if drug_class:
+        attention_dropout = get_dropout_schedule(drug_class)
 
     for train_idx, val_idx in cv.split(np.zeros(len(y)), y):
         x_train = [per_residue_list[i] for i in train_idx]
@@ -294,7 +310,7 @@ def cv_attention_predictions(
                 input_dim=input_dim,
                 attention_dim=input_dim if input_dim < 256 else 256,
                 n_heads=n_heads,
-                dropout=attention_dropout,
+                dropout=attention_dropout,  # IMPROVEMENT 3: Use per-drug dropout
                 epochs=epochs,
                 verbose=False,
             )
@@ -344,6 +360,7 @@ def build_fusion_features(
     attention_pooled: np.ndarray,
     frequencies: Optional[np.ndarray] = None,
     rare_tau: float = 0.05,
+    drm_features: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
     Concatenate mean, max, attention-pooled, and rare-mutation summary features.
@@ -385,90 +402,34 @@ def _fit_classifier(
     X_val: Optional[np.ndarray] = None,
     y_val: Optional[np.ndarray] = None,
     random_state: int = 42,
+    drug_class: str = None,
+    drug: str = None,
 ):
-    params = params or {}
-    if model_type == 'logistic':
-        scaler = StandardScaler()
-        x_tr = scaler.fit_transform(X_train)
-        model = LogisticRegression(
-            C=params.get('C', 1.0),
-            max_iter=2000,
-            class_weight='balanced',
-            random_state=random_state,
-        )
-        model.fit(x_tr, y_train)
-        return model, scaler
-
-    if model_type == 'xgboost':
-        n_pos = y_train.sum()
-        n_neg = len(y_train) - n_pos
-        spw = n_neg / n_pos if n_pos > 0 else 1.0
-        model = xgb.XGBClassifier(
-            n_estimators=params.get('n_estimators', 300),
-            max_depth=params.get('max_depth', 6),
-            learning_rate=params.get('learning_rate', 0.05),
-            subsample=params.get('subsample', 0.8),
-            colsample_bytree=params.get('colsample_bytree', 0.8),
-            reg_alpha=params.get('reg_alpha', 0.1),
-            reg_lambda=params.get('reg_lambda', 1.0),
-            scale_pos_weight=spw,
-            random_state=random_state,
-            eval_metric='auc',
-            n_jobs=-1,
-        )
-        if X_val is not None and y_val is not None:
-            model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
-        else:
-            model.fit(X_train, y_train, verbose=False)
-        return model, None
-
-    if model_type == 'lightgbm':
-        if not HAS_LIGHTGBM:
-            raise ImportError("lightgbm is required for LightGBM models")
-        model = lgb.LGBMClassifier(
-            n_estimators=params.get('n_estimators', 300),
-            max_depth=params.get('max_depth', -1),
-            learning_rate=params.get('learning_rate', 0.05),
-            num_leaves=params.get('num_leaves', 31),
-            subsample=params.get('subsample', 0.8),
-            colsample_bytree=params.get('colsample_bytree', 0.8),
-            reg_alpha=params.get('reg_alpha', 0.1),
-            reg_lambda=params.get('reg_lambda', 1.0),
-            class_weight='balanced',
-            random_state=random_state,
-            n_jobs=-1,
-            verbose=-1,
-        )
-        if X_val is not None and y_val is not None:
-            model.fit(
-                X_train,
-                y_train,
-                eval_set=[(X_val, y_val)],
-                callbacks=[lgb.early_stopping(30, verbose=False)],
-            )
-        else:
-            model.fit(X_train, y_train)
-        return model, None
-
-    if model_type == 'rf':
-        model = RandomForestClassifier(
-            n_estimators=params.get('n_estimators', 300),
-            max_depth=params.get('max_depth', 10),
-            min_samples_leaf=params.get('min_samples_leaf', 2),
-            class_weight='balanced',
-            random_state=random_state,
-            n_jobs=-1,
-        )
-        model.fit(X_train, y_train)
-        return model, None
-
-    raise ValueError(f"Unknown model type: {model_type}")
+    """
+    Fit a classifier with support for PHASE 5 improvements.
+    
+    Now uses:
+    - XGBoost on ESM embeddings (IMPROVEMENT 2)
+    - Per-drug hyperparameter tuning
+    - Dropout regularization for overfitting-prone drugs (IMPROVEMENT 3)
+    """
+    # Use improved implementation with XGBoost for ESM
+    return _fit_classifier_improved(
+        model_type=model_type,
+        X_train=X_train,
+        y_train=y_train,
+        params=params,
+        X_val=X_val,
+        y_val=y_val,
+        random_state=random_state,
+        drug_class=drug_class,
+        drug=drug,
+    )
 
 
 def _predict_classifier(model_type: str, model, scaler, X: np.ndarray) -> np.ndarray:
-    if model_type == 'logistic':
-        return model.predict_proba(scaler.transform(X))[:, 1]
-    return model.predict_proba(X)[:, 1]
+    """Predict using improved classifiers."""
+    return _predict_classifier_improved(model_type, model, scaler, X)
 
 
 def optuna_tune_classifier(
@@ -620,6 +581,24 @@ def stacked_ensemble_cv(
             )
 
     stacked_features = np.vstack([oof_preds[m] for m in model_types]).T
+    
+    # Generate leak-free, out-of-fold predictions for the ensemble using cross-validation
+    meta_cv = StratifiedKFold(n_splits=splits, shuffle=True, random_state=random_state)
+    ensemble_pred = np.zeros(len(y))
+    for m_train_idx, m_val_idx in meta_cv.split(stacked_features, y):
+        m_scaler = StandardScaler()
+        m_train_scaled = m_scaler.fit_transform(stacked_features[m_train_idx])
+        m_val_scaled = m_scaler.transform(stacked_features[m_val_idx])
+        
+        m_model = LogisticRegression(
+            max_iter=2000,
+            class_weight='balanced',
+            random_state=random_state,
+        )
+        m_model.fit(m_train_scaled, y[m_train_idx])
+        ensemble_pred[m_val_idx] = m_model.predict_proba(m_val_scaled)[:, 1]
+
+    # For final deployment/downstream test evaluation, fit the meta-learner on full stacked features
     meta_scaler = StandardScaler()
     stacked_scaled = meta_scaler.fit_transform(stacked_features)
     meta_model = LogisticRegression(
@@ -628,7 +607,6 @@ def stacked_ensemble_cv(
         random_state=random_state,
     )
     meta_model.fit(stacked_scaled, y)
-    ensemble_pred = meta_model.predict_proba(stacked_scaled)[:, 1]
 
     return ensemble_pred, {
         'meta_model': meta_model,
@@ -1447,7 +1425,7 @@ def run_publication_evaluation(
     drug_df = pd.DataFrame(drug_rows)
     if not drug_df.empty:
         drug_df.to_csv(improved_dir / 'drug_wise_performance.csv', index=False)
-        drug_df.to_csv(improved_dir / 'drugwise_auc_summary.csv', index=False)
+
 
         mean_test = drug_df['test_auc'].mean()
         mean_drop = drug_df['auc_drop'].mean()
@@ -1502,7 +1480,6 @@ def run_publication_evaluation(
     pd.DataFrame(ece_rows).to_csv(improved_dir / 'ece_scores.csv', index=False)
     pd.DataFrame(brier_rows).to_csv(improved_dir / 'brier_scores.csv', index=False)
     pd.DataFrame(ternary_rows).to_csv(improved_dir / 'ternary_classification_results.csv', index=False)
-    pd.DataFrame(ternary_rows).to_csv(improved_dir / 'ternary_results.csv', index=False)
     pd.DataFrame(nested_rows).to_csv(improved_dir / 'nested_cv_results.csv', index=False)
     pd.DataFrame(temporal_rows).to_csv(improved_dir / 'temporal_validation.csv', index=False)
     pd.DataFrame(baseline_comparison_rows).to_csv(improved_dir / 'baseline_comparison.csv', index=False)

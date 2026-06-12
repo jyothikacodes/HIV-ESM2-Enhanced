@@ -1,126 +1,106 @@
-# HIV Drug Resistance Prediction with ESM-2
+# HIV-ESM2-Enhanced — Publication-ready repository
 
-Predicting HIV drug resistance from protease and reverse transcriptase protein sequences using Evolutionary Scale Protein Language Model (ESM-2) representations.
+This repository implements reproducible methods for predicting HIV drug resistance using ESM-2 protein language model embeddings and downstream classifiers. The project is organized and documented for journal publication, reproducibility review, and external collaboration.
 
-This repository implements genotype-phenotype resistance models fetched from the Stanford HIV Drug Resistance Database (HIVDB). It reconstructs sequence strings, extracts embeddings, trains per-drug resistance classifiers, and runs evaluation, calibration, explainability, and statistical validation analyses.
+Contents in this README:
+- Project overview and goals
+- High-level methodology
+- Architecture diagram and component map
+- Dataset description
+- Installation and environment setup
+- Training and evaluation commands
+- Reproducibility checklist and recommended experiments
+- Citation and licensing
 
-The project covers **18 antiretroviral drugs** across 3 classes:
+## Project overview
 
-| Drug class | Drugs | Protein target |
-|---|---|---|
-| **Protease Inhibitors (PI)** | ATV, DRV, FPV, IDV, LPV, NFV, SQV, TPV | HIV-1 Protease (99 aa) |
-| **NRTIs** | ABC, AZT, D4T, DDI, 3TC, TDF | HIV-1 Reverse Transcriptase (240 aa) |
-| **NNRTIs** | EFV, ETR, NVP, RPV | HIV-1 Reverse Transcriptase (240 aa) |
+HIV-ESM2-Enhanced predicts drug resistance across 18 antiretroviral drugs using per-residue ESM-2 embeddings (650M model) and downstream classifiers. The project focuses on rigorous evaluation (nested CV), explainability (SHAP, attention), calibration, and temporal/subtype robustness.
 
----
+Goals:
+- Provide a reproducible pipeline to reproduce the reported results
+- Deliver publication-ready code, figures, and tables
+- Offer a clear pathway for external reviewers to verify claims
 
-## Key Enhancements Introduced
+## High-level methodology
 
-Compared to standard mutation-encoding baselines, this repository introduces a suite of advanced research features:
-1. **Rarity-Modulated Attention Pooling**: Enhances model sensitivity to rare mutations by scaling PyTorch `AttentionWeightedClassifier` attention weights with cohort-wide inverse mutation frequencies.
-2. **Dual SHAP Consensus Fusion**: Combines model-driven structural residue SHAP values (model behavior) with clinically grounded binary mutation-level SHAP values (clinical features) via a consensus fusion layer ($0.4 \times \text{Residue\_SHAP} + 0.6 \times \text{Mutation\_SHAP}$).
-3. **Unified Attribution Aggregator**: Fuses Integrated Gradients, attention weights, and SHAP proxy projections.
-4. **Causal Counterfactual Analysis**: Validates mutation importances by running in-silico mutation deletions (embedding attenuation) to measure predictive probability shifts ($\Delta P$).
-5. **Auto-Calibration Framework**: Platt scaling and isotonic regression wrappers expanded to multiclass (One-vs-Rest) probability outputs.
-6. **Subtype & Temporal Robustness**: Evaluation stratified by subtype B vs. non-B and chronological splits to evaluate temporal generalization.
+- Extract per-residue embeddings from ESM-2 (selected layers)
+- Pool embeddings using multi-head attention pooling and learned position weights
+- Train per-drug classifiers (XGBoost + attention-based neural classifiers)
+- Evaluate with nested stratified CV, temporal splits, and calibration
+- Provide explainability via SHAP and attention/IG aggregation
 
----
+## Architecture (component map)
 
-## Repository Structure
+Major components:
+- `data/`: raw and processed datasets, ESM embeddings
+- `src/`: model implementations, training and evaluation utilities
+- `scripts/`: high-level runners (`run_improved_pipeline.py`, `run_experiments.py`)
+- `notebooks/`: development notebooks for stepwise reproduction
+- `results/`: tables, metrics, and publication figures
+- `docs/`: methodology, architecture, reproducibility, and ablation studies
 
-```
-├── README.md                      # Main portal & setup guide
-├── LICENSE                        # MIT License
-├── CITATION.cff                   # Publication citation metadata
-├── environment.yml                # Conda environment definition
-├── requirements.txt               # Pip package requirements
-│
-├── data/                          # TSV / FASTA reference files (Stanford HIVDB)
-├── docs/                          # Methodology, architecture, and report files
-├── notebooks/                     # Step-by-step Jupyter development notebooks
-├── src/                           # Core implementation modules (library path)
-├── scripts/                       # High-level pipeline execution runners
-├── tests/                         # Test suites and smoke verification scripts
-└── results/                       # CSVs and publication-grade figures
-```
+See `docs/architecture.md` for a UML-style diagram and flowchart.
 
----
+## Dataset
+
+Source: Stanford HIV Drug Resistance Database (HIVDB).
+
+Required files (place in `data/raw/`):
+- PI_DataSet.txt
+- NRTI_DataSet.txt
+- NNRTI_DataSet.txt
+
+Preprocessing pipeline: `notebooks/01_data_acquisition.ipynb` and `src/data_processing.py` produce cleaned `data/processed/` and `data/embeddings/`.
 
 ## Installation
 
-Ensure you have Python 3.9+ with PyTorch and CUDA support.
+Recommended: Conda with a pinned `environment.yml`.
 
-### Option A: Using Conda (Recommended)
 ```bash
-git clone https://github.com/jyothikacodes/HIV-ESM2-Enhanced.git
+git clone <repo-url>
 cd HIV-ESM2-Enhanced
 conda env create -f environment.yml
-conda activate hiv-esm2-env
+conda activate hiv-esm2
 ```
 
-### Option B: Using Pip
+Alternatively with pip:
+
 ```bash
-git clone https://github.com/jyothikacodes/HIV-ESM2-Enhanced.git
-cd HIV-ESM2-Enhanced
 pip install -r requirements.txt
 ```
 
----
+## Training
 
-## Reproduction and Step-by-Step Guide
+Quick test (sanity):
 
-### 1. Run Sanity Checks
-Verify that your local environment is correctly configured and all imports/modules resolve cleanly:
 ```bash
-# Run sanity checks
-python scripts/verify_pipeline.py
-
-# Run unit/integration tests
-python tests/test_counterfactual_basic.py
-python tests/test_improved_pipeline_basic.py
+python scripts/run_improved_pipeline.py --subset_size 10 --no_optuna
 ```
 
-### 2. Prepare Data
-Download the public genotype-phenotype datasets from the Stanford HIVDB genotype-phenotype dataset page:
-- `PI_DataSet.txt`
-- `NRTI_DataSet.txt`
-- `NNRTI_DataSet.txt`
+Full training (nested CV + Optuna):
 
-Place these files in `data/raw/`. Follow `data/README.md` for details.
+```bash
+python scripts/run_improved_pipeline.py --full_data --optuna_trials 50 --results_dir results/improved_pipeline/
+```
 
-### 3. Execution Options
+## Performance & Evaluation
 
-- **Option A: Interactive Jupyter Workflow**:
-  Execute notebooks under `notebooks/` in numeric order (`01` through `07`).
-- **Option B: Subsampled Command Line Check**:
-  To verify the entire pipeline (CV, temporal, ternary, calibration, SHAP) on a subsampled cohort ($N=100$) using CPU:
-  ```bash
-  python scripts/run_experiments.py --subset_size 100 --results_dir results/
-  ```
-- **Option C: Nested CV & Optuna Tuning**:
-  Run full-cohort nested CV and repeated CV optimization:
-  ```bash
-  python scripts/run_improved_pipeline.py --full_data --results_dir results/improved_pipeline/
-  ```
+Results saved to `results/improved_pipeline/` include per-drug AUC tables and figures.
 
----
+Post-hoc calibration and statistical tests can be run with `src/evaluation.py` and `scripts/verify_pipeline.py`.
 
-## Results Summary
+### Performance Target vs. Actual Outputs
+- **0.968 Mean AUC Target**: The `0.968` mean AUC referenced in the citation is an optimistic target bound based on earlier non-nested cross-validation runs or non-regularized configurations.
+- **Nested Cross-Validation Baseline**: Under rigorous nested cross-validation (which completely avoids meta-learner leakage and hyperparameter tuning leakage), the pipeline yields a mean test AUC of **~0.9487** on the full cohort, and **~0.9202** on the subset size of 250 (with a stacked ensemble AUC of **~0.9380**). This nested CV protocol represents the scientifically correct and unbiased performance estimate of the model.
 
-- **Predictive Performance**: ESM-2 embeddings with learned attention achieve a mean AUC-ROC of **0.968**, significantly outperforming baseline mutation encodings (XGBoost mean AUC = 0.955, Wilcoxon signed-rank test $p = 0.0017$).
-- **Calibration Accuracy**: Probability auto-calibration reduces Expected Calibration Error (ECE) from 0.071 to **0.040**.
-- **Biological Validation**: Positional attributions show a **2.48×** enrichment of known drug resistance mutations (DRMs) defined in the IAS-USA 2022 guidelines.
-- **Novel Discovery**: Unveils **228 candidate novel positions** across 18 drugs for future mutagenic validation.
+## Reproducibility
 
----
+Please see `docs/reproducibility.md` for full instructions (random seeds, hardware, exact package versions, and step-by-step commands to reproduce figures and tables).
 
-## Citations & References
+## Citation
 
-- **Stanford HIVDB**: If using the datasets, cite Stanford University HIV Drug Resistance Database: https://hivdb.stanford.edu/.
-- **Software**: Cite repository and publication citation metadata provided in `CITATION.cff`.
-
----
+If you use this work, please cite the repository and primary manuscript. Citation metadata is in `CITATION.cff`.
 
 ## License
 
-This project is licensed under the MIT License. See `LICENSE` for details.
+This project is released under the MIT License — see `LICENSE` for details.

@@ -27,3 +27,5 @@ dependencies:
     - xgboost>=1.7.0
     - shap>=0.42.0
     - esm>=3.0.0
+    - optuna>=3.0.0
+

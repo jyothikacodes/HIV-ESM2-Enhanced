@@ -220,13 +220,13 @@ def bootstrap_auc(
     Returns:
         Tuple of (point_estimate, lower_ci, upper_ci)
     """
-    np.random.seed(random_state)
+    rng = np.random.RandomState(random_state)
 
     n = len(y_true)
     aucs = []
 
     for _ in range(n_bootstrap):
-        indices = np.random.choice(n, size=n, replace=True)
+        indices = rng.choice(n, size=n, replace=True)
         y_true_boot = y_true[indices]
         y_pred_boot = y_pred[indices]
 
