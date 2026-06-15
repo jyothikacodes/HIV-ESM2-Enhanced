@@ -25,5 +25,5 @@ from . import shap_explainability
 from . import calibration
 from . import dual_shap_explainability
 from . import counterfactual_mutation_analysis
-from . import option_b_evaluation
+from . import scientific_validation
 

@@ -1,7 +1,7 @@
 """
-src/option_b_evaluation.py
+src/scientific_validation.py
 
-Scientific validation module (Option B) to evaluate the impact of rare mutation weighting
+Scientific validation module to evaluate the impact of rare mutation weighting
 and attention modulation against baseline models across 18 HIV drugs.
 
 IMPLEMENTATION COMPLETE: All 5 experiments are now implemented.
@@ -375,7 +375,7 @@ def load_embeddings_data(data_dir: str, subset_size: int = 100) -> Dict:
     return sub_data
 
 
-def run_evaluation_pipeline(data_dir="data", results_dir="results/option_b_evaluation", seed=42, subset_size=100):
+def run_evaluation_pipeline(data_dir="data", results_dir="results/scientific_validation", seed=42, subset_size=100):
     """
     Main evaluation pipeline running all 5 experiments.
     """
@@ -385,7 +385,7 @@ def run_evaluation_pipeline(data_dir="data", results_dir="results/option_b_evalu
     visuals_dir.mkdir(parents=True, exist_ok=True)
     
     print("="*80)
-    print("OPTION B: SCIENTIFIC VALIDATION MODULE - ALL 5 EXPERIMENTS")
+    print("SCIENTIFIC VALIDATION MODULE - ALL 5 EXPERIMENTS")
     print("="*80)
     
     # Load dataset
@@ -404,7 +404,7 @@ def run_evaluation_pipeline(data_dir="data", results_dir="results/option_b_evalu
     drugs_tested = []
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Running Option B scientific validation on {device}...")
+    print(f"Running scientific validation on {device}...")
     
     for drug_class, data in sub_data.items():
         print(f"\n==================== PROCESSING CLASS: {drug_class} ====================")
@@ -761,7 +761,7 @@ def run_evaluation_pipeline(data_dir="data", results_dir="results/option_b_evalu
         plt.close()
         
     print("\n" + "="*60)
-    print("OPTION B EVALUATION RUN COMPLETED SUCCESSFULLY")
+    print("SCIENTIFIC VALIDATION RUN COMPLETED SUCCESSFULLY")
     print(f"All outputs saved under: {results_dir}")
     print("="*60)
 
