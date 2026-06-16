@@ -18,11 +18,10 @@ embeddings/
 models/
 
 # Results and figures (regenerated)
-results/*.csv
-results/*.json
-figures/*.png
-figures/*.pdf
-figures/*.svg
+results/
+!results/.gitkeep
+figures/
+
 
 # Python
 __pycache__/

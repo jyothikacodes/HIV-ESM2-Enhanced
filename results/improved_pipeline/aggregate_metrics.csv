@@ -1,2 +1,0 @@
-mean_test_auc,mean_baseline_test_auc,mean_val_auc,mean_train_auc,mean_auc_drop,mean_temporal_auc,mean_temporal_auc_drop,mean_ensemble_auc,mean_calibrated_ece,mean_calibrated_brier,wilcoxon_statistic_improved_vs_baseline,p_value_improved_vs_baseline,n_drugs,target_auc_met,target_drop_met,target_temporal_drop_met
-0.9202752558655338,0.8913220331623111,0.8291462420963968,1.0,-0.09112901376913679,0.8814869281045752,-0.05722210566980711,0.9380535209869518,0.07602937522129263,0.08141983037394893,54.0,0.18146514892578125,18,False,True,True
