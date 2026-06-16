@@ -18,7 +18,7 @@ embeddings/
 models/
 
 # Results and figures (regenerated)
-results/
+# results/
 !results/.gitkeep
 figures/
 
