@@ -15,6 +15,7 @@ from src.improved_pipeline import (
     compare_calibration_methods_oof,
     compare_pooling_strategies,
     ensemble_soft_vote_cv,
+    hybrid_ensemble_cv,
     stacked_ensemble_cv,
     nested_cv_evaluation,
 )
@@ -56,11 +57,28 @@ def test_pooling_and_nested_cv():
 def test_fusion_includes_rare_mutation_features():
     per_residue, sequences, _ = _synthetic_cohort()
     embed_dim = per_residue[0].shape[1]
+    seq_len = per_residue[0].shape[0]
     attn = np.random.randn(len(per_residue), embed_dim).astype(np.float32)
     fusion = build_fusion_features(
-        per_residue, sequences, HIV_PROTEASE_REFERENCE, attention_pooled=attn
+        per_residue, sequences, HIV_PROTEASE_REFERENCE[:seq_len], attention_pooled=attn
     )
-    assert fusion.shape[1] == embed_dim * 2 + embed_dim + 4
+    # mean + max + attention + rare(4) + mutation(seq_len)
+    assert fusion.shape[1] == embed_dim * 3 + 4 + seq_len
+
+
+def test_fusion_without_mutation_encoding():
+    per_residue, sequences, _ = _synthetic_cohort()
+    embed_dim = per_residue[0].shape[1]
+    seq_len = per_residue[0].shape[0]
+    attn = np.random.randn(len(per_residue), embed_dim).astype(np.float32)
+    fusion = build_fusion_features(
+        per_residue,
+        sequences,
+        HIV_PROTEASE_REFERENCE[:seq_len],
+        attention_pooled=attn,
+        include_mutation_encoding=False,
+    )
+    assert fusion.shape[1] == embed_dim * 3 + 4
 
 
 def test_multihead_attention_pooling_classifier():
@@ -109,6 +127,17 @@ def test_ensemble_and_calibration():
     assert len(applied['y_pred_calibrated']) == len(y)
 
 
+def test_hybrid_ensemble_cv():
+    rng = np.random.RandomState(2)
+    X = rng.randn(40, 16).astype(np.float32)
+    y = rng.binomial(1, 0.4, size=40).astype(int)
+    preds, meta = hybrid_ensemble_cv(X, y, n_splits=4)
+    assert preds.shape == (40,)
+    assert np.all((preds >= 0) & (preds <= 1))
+    assert 'strategy' in meta
+    assert meta['auc'] >= max(meta.get('auc_stacked', 0), meta.get('auc_adaptive', 0)) - 1e-9
+
+
 def test_integration_pipeline_with_drm_features():
     per_residue, sequences, y = _synthetic_cohort(n=50, embed_dim=16, seq_len=20)
     # Compute DRM position features
@@ -127,7 +156,7 @@ def test_integration_pipeline_with_drm_features():
         drm_features=drm_features
     )
     
-    expected_dim = 16 * 2 + 16 + 4 + drm_features.shape[1]
+    expected_dim = 16 * 3 + 4 + 20 + drm_features.shape[1]
     assert fusion.shape[1] == expected_dim
     
     # Run stacked ensemble and ensure it doesn't leak or error
@@ -140,6 +169,8 @@ def test_integration_pipeline_with_drm_features():
 if __name__ == '__main__':
     test_temperature_scaling()
     test_fusion_includes_rare_mutation_features()
+    test_fusion_without_mutation_encoding()
+    test_hybrid_ensemble_cv()
     test_pooling_and_nested_cv()
     test_ensemble_and_calibration()
     test_integration_pipeline_with_drm_features()

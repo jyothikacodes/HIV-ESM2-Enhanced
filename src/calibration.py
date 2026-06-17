@@ -56,10 +56,8 @@ def calibrate_predictions(
         return temperature_scaling(y_true_cal, y_pred_cal, y_pred_test)
     elif method == 'auto':
         # Select best method using cross-validation on the calibration set
-        # Since the calibration set might be small, we default to 3-fold CV
         n_splits = min(3, int(np.min(np.bincount(y_true_cal.astype(int)))))
         if n_splits < 2:
-            # Fallback to platt if insufficient samples for CV
             return platt_scaling(y_true_cal, y_pred_cal, y_pred_test)
 
         cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
@@ -70,26 +68,20 @@ def calibrate_predictions(
             y_train_c, y_val_c = y_true_cal[train_idx], y_true_cal[val_idx]
             y_pred_train_c, y_pred_val_c = y_pred_cal[train_idx], y_pred_cal[val_idx]
 
-            # Evaluate Platt scaling
             try:
                 p_cal = platt_scaling(y_train_c, y_pred_train_c, y_pred_val_c)
                 platt_brier += brier_score_loss(y_val_c, p_cal)
             except Exception:
-                platt_brier += 1.0  # Penalty for failure
+                platt_brier += 1.0
 
-            # Evaluate Isotonic scaling
             try:
                 i_cal = isotonic_calibration(y_train_c, y_pred_train_c, y_pred_val_c)
                 isotonic_brier += brier_score_loss(y_val_c, i_cal)
             except Exception:
-                isotonic_brier += 1.0  # Penalty for failure
+                isotonic_brier += 1.0
 
-        # Choose best method and fit on full calibration set
         best_method = 'platt' if platt_brier <= isotonic_brier else 'isotonic'
-        if best_method == 'platt':
-            return platt_scaling(y_true_cal, y_pred_cal, y_pred_test)
-        else:
-            return isotonic_calibration(y_true_cal, y_pred_cal, y_pred_test)
+        return calibrate_predictions(y_true_cal, y_pred_cal, y_pred_test, method=best_method)
     else:
         raise ValueError(f"Unknown calibration method: {method}")
 

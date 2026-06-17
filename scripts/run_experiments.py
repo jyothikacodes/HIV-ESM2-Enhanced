@@ -13,8 +13,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Import modules from src
 from src.data_processing import (
-    load_fasta, save_fasta, load_unified_data,
-    PI_DRUGS, NRTI_DRUGS, NNRTI_DRUGS
+    build_processed_hivdb_data,
+    load_fasta,
+    save_fasta,
+    load_unified_data,
+    PI_DRUGS,
+    NRTI_DRUGS,
+    NNRTI_DRUGS
 )
 from src.feature_engineering import (
     load_esm2_model,
@@ -153,8 +158,15 @@ def select_and_extract_subsampled_data(data_dir, subset_size, seed=42):
     data_dir = Path(data_dir)
     processed_dir = data_dir / 'processed'
     embeddings_dir = data_dir / 'embeddings'
+    processed_dir.mkdir(parents=True, exist_ok=True)
     embeddings_dir.mkdir(parents=True, exist_ok=True)
-    
+
+    # Automatically build processed FASTA/CSV files from raw HIVDB exports when missing.
+    try:
+        build_processed_hivdb_data(data_dir, processed_dir)
+    except FileNotFoundError:
+        pass
+
     unified_data = load_unified_data(processed_dir)
     
     sub_data = {}

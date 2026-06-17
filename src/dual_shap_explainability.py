@@ -21,6 +21,12 @@ from scipy.stats import hypergeom, fisher_exact
 from sklearn.linear_model import LogisticRegression
 import shap
 
+from src.rare_mutations import (
+    compute_mutation_frequencies,
+    compute_rare_mutation_weights,
+    normalize_weights_for_attention,
+)
+
 # Set styling for premium visualizations
 plt.style.use('seaborn-v0_8-whitegrid')
 plt.rcParams['figure.dpi'] = 150
@@ -312,6 +318,13 @@ def run_dual_shap_pipeline(
         
         # Rename drug columns for internal consistency
         renamed_pheno = phenotypes.rename(columns={d: f"{d}_FC" for d in drugs})
+
+        # Rare mutation weights for attention training (aligned with improved pipeline)
+        freqs = compute_mutation_frequencies(sequences, reference)
+        raw_weights = compute_rare_mutation_weights(sequences, reference, frequencies=freqs)
+        norm_rare_weights = [
+            normalize_weights_for_attention(w, method='softmax') for w in raw_weights
+        ]
         
         # Prepare mutation map for this class
         class_mutations = set()
@@ -334,6 +347,7 @@ def run_dual_shap_pipeline(
             y_valid = (y_vals[valid_mask] >= 2.5).astype(int)
             X_valid = [per_residue[i] for i in range(len(per_residue)) if valid_mask[i]]
             seqs_valid = [sequences[i] for i in range(len(sequences)) if valid_mask[i]]
+            rw_valid = [norm_rare_weights[i] for i in range(len(norm_rare_weights)) if valid_mask[i]]
             
             n_resistant = int(y_valid.sum())
             n_susceptible = len(y_valid) - n_resistant
@@ -342,10 +356,11 @@ def run_dual_shap_pipeline(
                 print(f"Skipping {drug}: cohort imbalance")
                 continue
                 
-            # Train Attention Model to extract attention weights
+            # Train Attention Model with rare-mutation weighting
             print("Training classifier model to extract attention weights...")
             attn_model = train_attention_model(
                 X_valid, y_valid,
+                rare_mutation_weights_list=rw_valid,
                 epochs=20,
                 verbose=False,
                 device=device
@@ -354,11 +369,12 @@ def run_dual_shap_pipeline(
             # Extract attention weights for each sequence
             attn_model.eval()
             attention_weights = []
-            for emb in X_valid:
+            for emb, rw in zip(X_valid, rw_valid):
                 emb_tensor = torch.tensor(emb, dtype=torch.float32, device=device).unsqueeze(0)
                 mask_tensor = torch.ones(1, len(emb), device=device)
+                rw_tensor = torch.tensor(rw, dtype=torch.float32, device=device).unsqueeze(0)
                 with torch.no_grad():
-                    _, weights_tensor = attn_model(emb_tensor, mask_tensor)
+                    _, weights_tensor = attn_model(emb_tensor, mask_tensor, rare_mutation_weights=rw_tensor)
                 attention_weights.append(weights_tensor.squeeze(0).cpu().numpy())
                 
             # --- MODULE 1: Attention-Aligned Residue SHAP ---

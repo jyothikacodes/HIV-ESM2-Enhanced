@@ -240,20 +240,19 @@ def train_attention_model(
     lr: float = 1e-4,
     early_stopping_patience: int = 5,
     device: Optional[torch.device] = None,
-    verbose: bool = False
+    verbose: bool = False,
+    adaptive_hyperparams: bool = True
 ) -> AttentionWeightedClassifier:
     """
-    Train the attention-weighted classifier end-to-end.
+    Train the attention-weighted classifier end-to-end with accuracy enhancements.
     
     Args:
         embeddings_list: List of (seq_len, embed_dim) arrays
         labels: Binary labels
         val_embeddings_list: Validation embeddings
         val_labels: Validation labels
-        rare_mutation_weights_list: Optional list of per-residue rarity
-            weight vectors for training sequences. When provided, attention
-            weights are modulated by these values during training.
-        val_rare_mutation_weights_list: Same as above for validation set.
+        rare_mutation_weights_list: Optional list of per-residue rarity weight vectors
+        val_rare_mutation_weights_list: Same as above for validation set
         input_dim: Embedding dimension
         attention_dim: Hidden dimension for attention net
         batch_size: Batch size
@@ -262,12 +261,32 @@ def train_attention_model(
         early_stopping_patience: Stop if validation AUC does not improve for this many epochs
         device: Torch device
         verbose: Print progress
+        adaptive_hyperparams: If True, automatically tune hyperparameters based on data
         
     Returns:
         Trained AttentionWeightedClassifier model
     """
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Compute class weights for imbalanced data
+    n_samples = len(labels)
+    n_positive = int(labels.sum())
+    n_negative = n_samples - n_positive
+    pos_weight = n_negative / (n_positive + 1e-8)
+    
+    # Adaptive hyperparameters based on dataset size and class balance
+    if adaptive_hyperparams:
+        # Larger cohorts can use smaller batch sizes for better gradient estimation
+        if n_samples >= 500:
+            batch_size = min(batch_size, 16)
+        # Small cohorts need more regularization
+        if n_samples < 100:
+            attention_dim = max(64, attention_dim // 2)
+        # Imbalanced cohorts (>80% one class) need more patience
+        imbalance_ratio = max(n_positive / n_samples, n_negative / n_samples)
+        if imbalance_ratio > 0.8:
+            early_stopping_patience = max(8, early_stopping_patience)
         
     # Prepare data
     train_dataset = EmbeddingDataset(
@@ -285,8 +304,17 @@ def train_attention_model(
     
     # Init model
     model = AttentionWeightedClassifier(input_dim, attention_dim).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.BCEWithLogitsLoss()
+    
+    # Use AdamW for better regularization (weight decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+    
+    # BCEWithLogitsLoss with class weighting for imbalanced data
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device))
+    
+    # Learning rate scheduler: reduce LR if validation AUC plateaus
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='max', factor=0.5, patience=2, min_lr=1e-6
+    )
     
     # Training loop with early stopping on validation AUC
     best_val_auc = -1.0
@@ -316,6 +344,10 @@ def train_attention_model(
             loss = criterion(logits, batch_y)
             
             loss.backward()
+            
+            # Gradient clipping to prevent exploding gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
             optimizer.step()
             train_loss += loss.item()
             
@@ -353,6 +385,9 @@ def train_attention_model(
                     val_probs.extend(probs)
             
             val_auc = roc_auc_score(val_labels, val_probs)
+            
+            # Update learning rate scheduler based on validation AUC
+            scheduler.step(val_auc)
 
             if val_auc > best_val_auc:
                 best_val_auc = val_auc
@@ -683,7 +718,10 @@ def per_drug_training(
     drugs: List[str],
     model_type: str = 'logistic',
     n_splits: int = 5,
-    random_state: int = 42
+    random_state: int = 42,
+    sequences: Optional[List[str]] = None,
+    reference: Optional[str] = None,
+    use_rare_mutation_weights: bool = False,
 ) -> Dict:
     """
     Train models for each drug and evaluate with cross-validation.
@@ -798,38 +836,62 @@ def per_drug_training(
         y_pred = np.zeros(len(y_valid))
 
         if model_type == 'attention':
+            seq_valid = None
+            rw_valid = None
+            if use_rare_mutation_weights and sequences is not None and reference is not None:
+                from .rare_mutations import (
+                    compute_mutation_frequencies,
+                    compute_rare_mutation_weights,
+                    normalize_weights_for_attention,
+                )
+                seq_valid = [sequences[i] for i in range(len(sequences)) if valid_mask[i]]
+                freqs = compute_mutation_frequencies(seq_valid, reference)
+                raw_w = compute_rare_mutation_weights(seq_valid, reference, frequencies=freqs)
+                rw_valid = [
+                    normalize_weights_for_attention(w, method='softmax') for w in raw_w
+                ]
+
             # Custom CV loop for attention model
             for train_idx, val_idx in cv.split(np.zeros(len(y_valid)), y_valid):
-                # Handle list indexing
                 X_train_fold = [X_valid[i] for i in train_idx]
                 X_val_fold = [X_valid[i] for i in val_idx]
                 y_train_fold = y_valid[train_idx]
                 y_val_fold = y_valid[val_idx]
-                
-                # Train
+                rw_train = [rw_valid[i] for i in train_idx] if rw_valid else None
+                rw_val = [rw_valid[i] for i in val_idx] if rw_valid else None
+
                 model = train_attention_model(
                     X_train_fold, y_train_fold,
                     val_embeddings_list=X_val_fold,
                     val_labels=y_val_fold,
+                    rare_mutation_weights_list=rw_train,
+                    val_rare_mutation_weights_list=rw_val,
                     epochs=20,
                     verbose=False
                 )
-                
-                # Predict
+
                 model.eval()
-                val_dataset = EmbeddingDataset(X_val_fold, y_val_fold)
+                val_dataset = EmbeddingDataset(
+                    X_val_fold, y_val_fold, rare_mutation_weights_list=rw_val
+                )
                 val_loader = DataLoader(val_dataset, batch_size=32, collate_fn=collate_embeddings)
-                
+
                 fold_preds = []
                 with torch.no_grad():
                     device = next(model.parameters()).device
-                    for v_emb, _, v_mask in val_loader:
+                    for val_batch in val_loader:
+                        if rw_val is not None and len(val_batch) == 4:
+                            v_emb, _, v_mask, v_rw = val_batch
+                            v_rw = v_rw.to(device)
+                        else:
+                            v_emb, _, v_mask = val_batch[:3]
+                            v_rw = None
                         v_emb = v_emb.to(device)
                         v_mask = v_mask.to(device)
-                        logits, _ = model(v_emb, v_mask)
+                        logits, _ = model(v_emb, v_mask, rare_mutation_weights=v_rw)
                         probs = torch.sigmoid(logits).cpu().numpy().flatten()
                         fold_preds.extend(probs)
-                        
+
                 y_pred[val_idx] = fold_preds
                 
         elif model_type == 'logistic':

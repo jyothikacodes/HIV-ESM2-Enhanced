@@ -1,7 +1,11 @@
 """
-Demonstration of Counterfactual Mutation Analysis Module outputs.
+Demonstration stub writer for counterfactual output schema.
 
-This shows the expected structure and outputs of the counterfactual_mutation_analysis module.
+NOTE: This script writes synthetic placeholder CSVs only. For real counterfactual
+analysis, run:
+    python src/counterfactual_mutation_analysis.py
+or:
+    python scripts/run_full_pipeline.py
 """
 import pandas as pd
 import numpy as np

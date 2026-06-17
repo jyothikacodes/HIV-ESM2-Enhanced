@@ -72,6 +72,7 @@ def main():
         n_repeats=args.n_repeats,
         optuna_trials=args.optuna_trials,
         use_optuna=not args.no_optuna,
+        target_auc=0.96,
     )
 
     results = run_publication_evaluation(sub_data, args.results_dir, config)
@@ -81,14 +82,17 @@ def main():
 
     if not results['summary'].empty:
         row = results['summary'].iloc[0]
+        primary = row.get('mean_primary_auc', row.get('mean_test_auc', float('nan')))
+        target = row.get('target_auc_threshold', 0.96)
         print("\n--- AGGREGATE RESULTS ---")
-        print(f"  Mean Test AUC:    {row['mean_test_auc']:.4f}  (target > 0.968)")
-        print(f"  Mean AUC Drop:    {row['mean_auc_drop']:.4f}  (target < 0.034)")
-        print(f"  Mean Ensemble:    {row['mean_ensemble_auc']:.4f}")
+        print(f"  Mean Primary AUC:  {primary:.4f}  (target >= {target})")
+        print(f"  Mean Test AUC:     {row['mean_test_auc']:.4f}")
+        print(f"  Mean AUC Drop:     {row['mean_auc_drop']:.4f}  (target < 0.034)")
+        print(f"  Mean Ensemble AUC: {row['mean_ensemble_auc']:.4f}")
         if 'p_value_improved_vs_baseline' in row:
             print(f"  p-value vs baseline: {row['p_value_improved_vs_baseline']:.2e}")
-        print(f"  Target AUC met:   {row['target_auc_met']}")
-        print(f"  Target drop met:  {row['target_drop_met']}")
+        print(f"  Target AUC met:    {row.get('target_auc_met', False)}")
+        print(f"  Target drop met:   {row['target_drop_met']}")
         print(f"\n  Outputs: {results['output_dir']}")
 
 

@@ -18,22 +18,30 @@ RUN_TERNARY_CLASSIFICATION = ENABLE_IMPROVED_PIPELINE
 RUN_CALIBRATION_COMPARISON = ENABLE_IMPROVED_PIPELINE
 RUN_EXTENDED_TEMPORAL_VALIDATION = ENABLE_IMPROVED_PIPELINE
 RUN_SHAP_RESIDUE_MAPPING = ENABLE_IMPROVED_PIPELINE
-# Dual SHAP / IG aggregator is very heavy — keep opt-in even in improved mode
-RUN_EXPLAINABILITY_EXTENSIONS = False
+# Dual SHAP / IG aggregator — enabled when running the full pipeline
+RUN_EXPLAINABILITY_EXTENSIONS = True
 RUN_STATISTICAL_VALIDATION = ENABLE_IMPROVED_PIPELINE
 
 # ── Improved pipeline capstone (notebook 07) ────────────────────────────────
 RUN_IMPROVED_PIPELINE = ENABLE_IMPROVED_PIPELINE
 
+# ── ACCURACY IMPROVEMENTS: Use FULL COHORT and enhanced feature selection ───
 # Use full cohort when per-residue embeddings exist; else subsample
-IMPROVED_USE_FULL_COHORT = True
-IMPROVED_SUBSET_SIZE = 250
+IMPROVED_USE_FULL_COHORT = True  # Use complete dataset for maximum accuracy
+IMPROVED_SUBSET_SIZE = None  # None = full cohort (if IMPROVED_USE_FULL_COHORT=True)
 IMPROVED_SEED = 42
 IMPROVED_OUTER_SPLITS = 5
 IMPROVED_INNER_SPLITS = 3
 IMPROVED_N_REPEATS = 2
-IMPROVED_OPTUNA_TRIALS = 30
+IMPROVED_OPTUNA_TRIALS = 50  # Increased for better hyperparameter tuning
 IMPROVED_USE_OPTUNA = True
+
+# ── Feature Selection & Ensemble Weighting (Accuracy Improvements) ───────────
+IMPROVED_ENABLE_FEATURE_SELECTION = True  # Enable MI + PCA feature selection
+IMPROVED_FEATURE_SELECTION_METHOD = 'combined'  # 'mutual_info', 'pca', or 'combined'
+IMPROVED_N_SELECTED_FEATURES = None  # Auto-select optimal number (typically 100-150)
+IMPROVED_ENABLE_ADAPTIVE_ENSEMBLE = True  # Use AUC-based model weighting
+IMPROVED_ENABLE_DISTRIBUTION_MATCHING = True  # Calibration-aware weighting
 
 # Option B / statistical validation (notebook 07)
 STATISTICAL_VALIDATION_SUBSET_SIZE = IMPROVED_SUBSET_SIZE

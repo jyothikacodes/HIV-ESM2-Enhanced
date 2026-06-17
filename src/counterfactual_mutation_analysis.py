@@ -177,7 +177,8 @@ def run_counterfactual_analysis(
     subset_size: int = 100,
     seed: int = 42,
     top_k: int = 10,
-    quick_demo: bool = True
+    quick_demo: bool = False,
+    use_rare_mutation_weights: bool = True,
 ):
     """
     Execute the full counterfactual mutation causal analysis pipeline.
@@ -233,6 +234,17 @@ def run_counterfactual_analysis(
         
         # Rename drug columns for internal consistency
         renamed_pheno = phenotypes.rename(columns={d: f"{d}_FC" for d in drugs})
+
+        from src.rare_mutations import (
+            compute_mutation_frequencies,
+            compute_rare_mutation_weights,
+            normalize_weights_for_attention,
+        )
+        freqs = compute_mutation_frequencies(sequences, reference)
+        raw_weights = compute_rare_mutation_weights(sequences, reference, frequencies=freqs)
+        norm_rare_weights = [
+            normalize_weights_for_attention(w, method='softmax') for w in raw_weights
+        ]
         
         # Subsample drugs for quick demo
         drugs_to_process = drugs[:3] if quick_demo else drugs
@@ -247,13 +259,20 @@ def run_counterfactual_analysis(
             y_valid = (y_vals[valid_mask] >= 2.5).astype(int)
             X_valid = [per_residue[i] for i in range(len(per_residue)) if valid_mask[i]]
             seqs_valid = [sequences[i] for i in range(len(sequences)) if valid_mask[i]]
+            rw_valid = (
+                [norm_rare_weights[i] for i in range(len(norm_rare_weights)) if valid_mask[i]]
+                if use_rare_mutation_weights else None
+            )
             
             # Subsample sequences for quick demo
             if quick_demo and len(seqs_valid) > 20:
                 sample_indices = np.random.RandomState(seed).choice(len(seqs_valid), 20, replace=False)
-                seqs_valid = [seqs_valid[i] for i in sorted(sample_indices)]
-                X_valid = [X_valid[i] for i in sorted(sample_indices)]
-                y_valid = y_valid[sorted(sample_indices)]
+                sorted_idx = sorted(sample_indices)
+                seqs_valid = [seqs_valid[i] for i in sorted_idx]
+                X_valid = [X_valid[i] for i in sorted_idx]
+                y_valid = y_valid[sorted_idx]
+                if rw_valid is not None:
+                    rw_valid = [rw_valid[i] for i in sorted_idx]
             
             n_resistant = int(y_valid.sum())
             n_susceptible = len(y_valid) - n_resistant
@@ -267,6 +286,7 @@ def run_counterfactual_analysis(
             try:
                 attn_model = train_attention_model(
                     X_valid, y_valid,
+                    rare_mutation_weights_list=rw_valid,
                     epochs=10 if quick_demo else 20,
                     verbose=False,
                     device=device
@@ -427,4 +447,4 @@ def run_counterfactual_analysis(
 
 
 if __name__ == '__main__':
-    run_counterfactual_analysis(subset_size=100, quick_demo=True)
+    run_counterfactual_analysis(subset_size=100, quick_demo=False)

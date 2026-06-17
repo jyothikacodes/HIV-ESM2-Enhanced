@@ -14,6 +14,20 @@ import numpy as np
 import pandas as pd
 
 
+# Reference sequences for HIV proteins
+HIV_PROTEASE_REFERENCE = (
+    "PQITLWQRPLVTIKIGGQLKEALLDTGADDTVLEEMSLPGRWKPKMIGGIGGFIKVRQYD"
+    "QILIEICGHKAIGTVLVGPTPVNIIGRNLLTQIGCTLNF"
+)
+
+HIV_RT_REFERENCE = (
+    "PISPIETVPVKLKPGMDGPKVKQWPLTEEKIKALVEICTEMEKEGKISKIGPENPYNTPV"
+    "FAIKKKDSTKWRKLVDFRELNKRTQDFWEVQLGIPHPAGLKKKKSVTVLDVGDAYFSVPL"
+    "DEDFRKYTAFTIPSINNETPGIRYQYNVLPQGWKGSPAIFQSSMTKILEPFRKQNPDIVI"
+    "YQYMDDLYVGSDLEIGQHRTKIEELRQHLLRWGFTTPDKKHQKEPPFLWMGYELHPDKWT"
+)
+
+
 # Drug lists by class
 PI_DRUGS = ['ATV', 'DRV', 'FPV', 'IDV', 'LPV', 'NFV', 'SQV', 'TPV']
 NRTI_DRUGS = ['ABC', 'AZT', 'D4T', 'DDI', '3TC', 'TDF']
@@ -76,21 +90,41 @@ def load_fasta(filepath: Path) -> Tuple[List[str], List[str]]:
     """
     try:
         from Bio import SeqIO
-    except ImportError as exc:
-        raise ImportError(
-            "Biopython is required to load FASTA files. "
-            "Install it with `pip install biopython` or add it to your environment."
-        ) from exc
+        sequences = []
+        seq_ids = []
 
-    sequences = []
-    seq_ids = []
+        with open(filepath, 'r') as f:
+            for record in SeqIO.parse(f, 'fasta'):
+                seq_ids.append(record.id)
+                sequences.append(str(record.seq))
 
-    with open(filepath, 'r') as f:
-        for record in SeqIO.parse(f, 'fasta'):
-            seq_ids.append(record.id)
-            sequences.append(str(record.seq))
+        return sequences, seq_ids
+    except ImportError:
+        # Fallback to simple FASTA parser if Biopython is not installed.
+        sequences = []
+        seq_ids = []
+        current_id = None
+        current_seq = []
 
-    return sequences, seq_ids
+        with open(filepath, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith('>'):
+                    if current_id is not None:
+                        seq_ids.append(current_id)
+                        sequences.append(''.join(current_seq))
+                    current_id = line[1:].split()[0]
+                    current_seq = []
+                else:
+                    current_seq.append(line)
+
+        if current_id is not None:
+            seq_ids.append(current_id)
+            sequences.append(''.join(current_seq))
+
+        return sequences, seq_ids
 
 
 def save_fasta(
@@ -146,9 +180,6 @@ def parse_hivdb_sequences(
         df = df[(df['seq_length'] >= min_length) & (df['seq_length'] <= max_length)]
 
     return df
-
-
-from .feature_engineering import HIV_PROTEASE_REFERENCE, HIV_RT_REFERENCE
 
 
 def reconstruct_sequences_from_positions(
@@ -261,7 +292,33 @@ def create_stratified_split(
     return train_seqs, test_seqs, train_labels, test_labels
 
 
-def load_unified_data(data_dir: Path) -> Dict:
+def _ensure_processed_data(
+    processed_dir: Path,
+    raw_data_dir: Path,
+    force: bool = False
+) -> None:
+    """
+    Ensure processed FASTA and phenotype files exist in the processed directory.
+
+    If any required processed file is missing, this helper will attempt to
+    build the processed artifacts from the raw HIVDB source data.
+    """
+    required_files = []
+    for drug_class in ['PI', 'NRTI', 'NNRTI']:
+        required_files.extend([
+            processed_dir / f'{drug_class}_sequences.fasta',
+            processed_dir / f'{drug_class}_phenotypes.csv'
+        ])
+
+    if force or any(not p.exists() for p in required_files):
+        build_processed_hivdb_data(raw_data_dir, processed_dir, force=force)
+
+
+def load_unified_data(
+    data_dir: Path,
+    raw_data_dir: Optional[Path] = None,
+    force_rebuild: bool = False
+) -> Dict:
     """
     Load unified data for all drug classes.
 
@@ -275,11 +332,19 @@ def load_unified_data(data_dir: Path) -> Dict:
             NNRTI_phenotypes.csv
 
     Args:
-        data_dir: Path to data directory
+        data_dir: Path to processed data directory
+        raw_data_dir: Optional path to raw HIVDB files if processed data must be built
+        force_rebuild: If True, rebuild processed files from raw data even if they exist
 
     Returns:
         Dictionary with data for each drug class
     """
+    if raw_data_dir is None:
+        raw_data_dir = data_dir.parent if data_dir.name == 'processed' else data_dir
+
+    # Ensure processed artifacts are available when raw data exists.
+    _ensure_processed_data(data_dir, raw_data_dir, force=force_rebuild)
+
     unified_data = {}
 
     for drug_class in ['PI', 'NRTI', 'NNRTI']:
@@ -293,7 +358,7 @@ def load_unified_data(data_dir: Path) -> Dict:
             # Get drug columns
             exclude_cols = {'Unnamed: 0', 'seq_id', 'index', 'SeqID', 'IsolateID', 'Subtype'}
             drug_columns = [c for c in phenotypes.columns
-                          if c not in exclude_cols and not c.startswith('Unnamed')]
+                            if c not in exclude_cols and not c.startswith('Unnamed')]
 
             unified_data[drug_class] = {
                 'sequences': sequences,
@@ -303,6 +368,125 @@ def load_unified_data(data_dir: Path) -> Dict:
             }
 
     return unified_data
+
+
+def _get_raw_dataset_path(data_dir: Path, drug_class: str) -> Path:
+    """
+    Resolve the raw HIVDB dataset path for a drug class.
+
+    Supports common naming conventions used by Stanford HIVDB exports.
+    """
+    candidates = [
+        data_dir / f"{drug_class}_DataSet.txt",
+        data_dir / f"{drug_class}_DataSet.tsv",
+        data_dir / f"{drug_class}_dataset.txt",
+        data_dir / f"{drug_class}_dataset.tsv",
+        data_dir / f"{drug_class}_genopheno.csv",
+        data_dir / f"{drug_class}_genopheno.txt",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    raise FileNotFoundError(
+        f"Raw dataset for {drug_class} not found in {data_dir}. "
+        f"Expected one of: {[str(p.name) for p in candidates]}"
+    )
+
+
+def parse_hivdb_genopheno_file(filepath: Path, drug_class: str) -> pd.DataFrame:
+    """
+    Load and parse a Stanford HIVDB genotype-phenotype file.
+
+    Args:
+        filepath: Path to raw dataset file
+        drug_class: 'PI', 'NRTI', or 'NNRTI'
+
+    Returns:
+        DataFrame with reconstructed sequences and phenotype columns.
+    """
+    # Support both tab-delimited and comma-delimited exports
+    if filepath.suffix.lower() == '.csv':
+        df = pd.read_csv(filepath, low_memory=False)
+    else:
+        try:
+            df = pd.read_csv(filepath, sep='\t', low_memory=False)
+        except pd.errors.ParserError:
+            df = pd.read_csv(filepath, sep=',', low_memory=False)
+
+    seq_col = None
+    # Prefer existing sequence column
+    for candidate in ['sequence', 'seq', 'Sequence', 'SEQ', 'AAseq']:
+        if candidate in df.columns:
+            seq_col = candidate
+            break
+
+    if seq_col is None:
+        # Reconstruct from position columns (e.g. P1, P2, ...)
+        ref = HIV_PROTEASE_REFERENCE if drug_class == 'PI' else HIV_RT_REFERENCE
+        df['sequence'] = reconstruct_sequences_from_positions(df, ref, position_prefix='P')
+    else:
+        df['sequence'] = df[seq_col].astype(str)
+
+    # Ensure an explicit sequence ID column
+    if 'SeqID' in df.columns:
+        df['seq_id'] = df['SeqID'].astype(str)
+    elif 'seq_id' in df.columns:
+        df['seq_id'] = df['seq_id'].astype(str)
+    elif 'IsolateID' in df.columns:
+        df['seq_id'] = df['IsolateID'].astype(str)
+    else:
+        df['seq_id'] = df.index.astype(str)
+
+    # Keep the raw phenotype columns and sequence metadata
+    phenotypes = df.copy()
+    return phenotypes
+
+
+def build_processed_hivdb_data(
+    raw_data_dir: Path,
+    processed_dir: Path,
+    force: bool = False
+) -> None:
+    """
+    Build processed FASTA and phenotype CSV files from raw HIVDB files.
+
+    Args:
+        raw_data_dir: Directory containing raw HIVDB files
+        processed_dir: Output directory for processed artifacts
+        force: If True, overwrite existing processed files
+    """
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    drug_classes = ['PI', 'NRTI', 'NNRTI']
+    drug_lists = {
+        'PI': PI_DRUGS,
+        'NRTI': NRTI_DRUGS,
+        'NNRTI': NNRTI_DRUGS,
+    }
+
+    for drug_class in drug_classes:
+        try:
+            raw_path = _get_raw_dataset_path(raw_data_dir, drug_class)
+        except FileNotFoundError:
+            # Skip classes for which raw data is not available.
+            continue
+
+        phenotypes = parse_hivdb_genopheno_file(raw_path, drug_class)
+        drug_cols = [col for col in phenotypes.columns if col in drug_lists[drug_class]]
+
+        # Save sequences FASTA
+        fasta_path = processed_dir / f"{drug_class}_sequences.fasta"
+        pheno_path = processed_dir / f"{drug_class}_phenotypes.csv"
+
+        if fasta_path.exists() and pheno_path.exists() and not force:
+            continue
+
+        sequences = phenotypes['sequence'].astype(str).tolist()
+        seq_ids = phenotypes['seq_id'].astype(str).tolist()
+        save_fasta(sequences, seq_ids, fasta_path)
+
+        # Save phenotype table (including sequence IDs and drug columns)
+        output_cols = ['seq_id'] + [c for c in phenotypes.columns if c != 'sequence']
+        phenotypes[output_cols].to_csv(pheno_path, index=False)
 
 
 def get_dataset_statistics(unified_data: Dict) -> pd.DataFrame:
