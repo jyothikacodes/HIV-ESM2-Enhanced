@@ -6,8 +6,8 @@ authors:
     orcid: "https://orcid.org/0009-0002-6226-440X"
     affiliation: "Independent Researcher, Finley, NSW, Australia"
 title: "HIV Drug Resistance Prediction with ESM-2 Protein Language Model"
-version: 1.0.1
-date-released: 2026-05-17
+version: 1.0.2
+date-released: 2026-06-08
 url: "https://github.com/hayden-farquhar/HIV-ESM-2"
 repository-code: "https://github.com/hayden-farquhar/HIV-ESM-2"
 license: MIT

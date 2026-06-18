@@ -1,7 +1,7 @@
 {
   "title": "HIV Drug Resistance Prediction with ESM-2 Protein Language Model",
   "upload_type": "software",
-  "description": "Analysis code for: Farquhar H. <em>Protein Language Model Embeddings Improve HIV Drug Resistance Prediction: A Comprehensive Benchmark with Attention-Based Interpretability</em>. Bioinformatics (2026), DOI: <a href=\"https://doi.org/10.1093/bioinformatics/btag260\">10.1093/bioinformatics/btag260</a>.<br><br>A machine learning pipeline for predicting HIV drug resistance from protein sequences using ESM-2 protein language model embeddings. The attention-weighted pooling approach achieves 0.968 mean AUC across 18 antiretroviral drugs, with 2.48x enrichment for known drug resistance mutations in high-attention positions.<br><br>v1.0.1 is a post-publication metadata update: the journal article DOI is now declared as a related identifier (isSupplementTo) and the CITATION.cff and README direct citation traffic to the article. No code changes.",
+  "description": "Analysis code for: Farquhar H. <em>Protein Language Model Embeddings Improve HIV Drug Resistance Prediction: A Comprehensive Benchmark with Attention-Based Interpretability</em>. Bioinformatics (2026), DOI: <a href=\"https://doi.org/10.1093/bioinformatics/btag260\">10.1093/bioinformatics/btag260</a>.<br><br>A machine learning pipeline for predicting HIV drug resistance from protein sequences using ESM-2 protein language model embeddings. The attention-weighted pooling approach achieves 0.968 mean AUC across 18 antiretroviral drugs, with 2.48x enrichment for known drug resistance mutations in high-attention positions.<br><br>v1.0.2 fixes the data-acquisition step: HIV-1 sequences are now reconstructed correctly from the Stanford HIVDB genotype-phenotype position columns (P1..Pn) relative to the HXB2 reference. The previously published notebook searched for a non-existent amino-acid sequence column and produced zero sequences on the current HIVDB download. Published analysis results and figures are unaffected (the original analysis used the correct reconstruction). Reported by an external user reproducing the pipeline.",
   "creators": [
     {
       "name": "Farquhar, Hayden",
@@ -10,7 +10,7 @@
     }
   ],
   "license": "MIT",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "keywords": [
     "HIV drug resistance",
     "protein language models",
