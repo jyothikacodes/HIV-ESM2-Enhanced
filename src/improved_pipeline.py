@@ -46,8 +46,6 @@ from .models import (
     train_multihead_attention_model,
 )
 from .improved_models_v2 import (
-    ImprovedMultiHeadAttentionPoolingClassifier,
-    RegularizedAttentionWeightedClassifier,
     _fit_classifier_improved,
     _predict_classifier_improved,
     get_dropout_schedule,
@@ -663,6 +661,8 @@ def nested_cv_evaluation(
     n_repeats: int = 1,
     tune_with_optuna: bool = False,
     optuna_trials: int = 20,
+    apply_shap_selection: bool = False,
+    shap_top_fraction: float = 0.8,
     random_state: int = 42,
 ) -> Dict[str, Any]:
     """
@@ -685,6 +685,12 @@ def nested_cv_evaluation(
         for outer_train_idx, outer_test_idx in outer_cv.split(X, y):
             x_train, x_test = X[outer_train_idx], X[outer_test_idx]
             y_train, y_test = y[outer_train_idx], y[outer_test_idx]
+
+            if apply_shap_selection:
+                # Select features strictly on training folds to prevent leakage
+                mask, _ = shap_feature_selection(x_train, y_train, top_fraction=shap_top_fraction, random_state=seed)
+                x_train = x_train[:, mask]
+                x_test = x_test[:, mask]
 
             best_params = params or {}
             if tune_with_optuna and HAS_OPTUNA:
@@ -1113,15 +1119,16 @@ def evaluate_drug_improved(
         random_state=seed,
     )
 
-    shap_mask, _ = shap_feature_selection(fusion_x, y, top_fraction=0.8, random_state=seed)
     nested_shap = nested_cv_evaluation(
-        fusion_x[:, shap_mask],
+        fusion_x,
         y,
         model_type='xgboost',
         params=nested.get('best_params'),
         outer_splits=config.get('outer_splits', 5),
         n_repeats=1,
         tune_with_optuna=False,
+        apply_shap_selection=True,
+        shap_top_fraction=0.8,
         random_state=seed,
     )
 

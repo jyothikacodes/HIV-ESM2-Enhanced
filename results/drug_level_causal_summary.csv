@@ -1,6 +1,0 @@
-drug,drug_class,mean_causal_sensitivity,std_causal_sensitivity,median_causal_sensitivity,n_mutations_analyzed
-ATV,PI,0.0632,0.0234,0.0589,12
-DRV,PI,0.0754,0.0312,0.0698,15
-FPV,PI,0.0521,0.0198,0.0478,10
-IDV,PI,0.0418,0.0156,0.0382,8
-3TC,NRTI,0.0856,0.0234,0.0812,18

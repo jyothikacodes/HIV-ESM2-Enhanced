@@ -1,21 +1,21 @@
-torch>=1.12.0
-fair-esm>=2.0.0
-scikit-learn>=1.3.0
-xgboost>=1.7.0
-shap>=0.42.0
-pandas>=2.0.0
-numpy>=1.24.0
-scipy>=1.10.0
-matplotlib>=3.7.0
-seaborn>=0.12.0
-biopython>=1.81
-tqdm>=4.65.0
-jupyter>=1.0.0
-optuna>=3.0.0
-lightgbm>=4.0.0
+torch==2.12.0
+fair-esm==2.0.0
+scikit-learn==1.8.0
+xgboost==3.2.0
+shap==0.51.0
+pandas==3.0.0
+numpy==2.4.0
+scipy==1.17.0
+matplotlib==3.10.9
+seaborn==0.13.2
+biopython==1.87
+tqdm==4.67.1
+jupyter==1.1.1
+openpyxl==3.1.5
+ipywidgets==8.1.8
+ipykernel==7.2.0
 
-# Optional / repository-specific extras
-esm>=3.0.0  # required for ESM C / ESM-1v imports in this repo
-openpyxl>=3.1.0
-ipywidgets>=8.0.0
-ipykernel
+# Optional / repository-specific extras (not installed by default)
+# optuna>=3.0.0 # Optional for hyperparameter tuning in improved pipeline
+# lightgbm>=4.0.0 # Optional ensemble model member
+# esm>=3.0.0 # Optional (causes namespace conflict with fair-esm; install only if using ESM C comparison in plm_comparison.py)

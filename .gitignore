@@ -17,9 +17,8 @@ embeddings/
 *.joblib
 models/
 
-# Results and figures (regenerated)
-# results/
-!results/.gitkeep
+# Results and figures (regenerated locally, not versioned)
+results/
 figures/
 
 

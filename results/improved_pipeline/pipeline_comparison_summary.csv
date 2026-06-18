@@ -1,4 +1,0 @@
-pipeline,mean_test_auc,mean_auc_drop,generalization,calibration,interpretability,clinical_utility,improves_mean_auc,improves_generalization,improves_calibration
-Original HIV-ESM-2 Paper,0.955,0.042,Good,Partial,Attention + DRM,Binary resistance,,,
-Current Pipeline,0.9487,0.0508,Moderate,Platt/isotonic (partial),SHAP + DRM,Binary only (default path),,,
-Improved Pipeline,0.9202752558655338,-0.05722210566980711,Strong,ECE=0.0760,SHAP + attention + rare mutations,Binary + ternary + calibrated probabilities,False,True,False

@@ -8,7 +8,7 @@ This package provides tools for:
 - Interpreting model predictions via attention analysis
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.2"
 __author__ = "Hayden Farquhar"
 __email__ = "hayden.farquhar@icloud.com"
 

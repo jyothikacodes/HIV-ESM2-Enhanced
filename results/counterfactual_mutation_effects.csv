@@ -1,6 +1,0 @@
-drug,drug_class,mutation,position,delta_probability,original_probability,counterfactual_probability,causal_direction
-ATV,PI,M36I,36,0.0543,0.65,0.7043,increases_resistance
-ATV,PI,L90M,90,0.1234,0.72,0.8434,increases_resistance
-ATV,PI,I84V,84,-0.0312,0.58,0.5488,decreases_resistance
-DRV,PI,L90M,90,0.0876,0.78,0.8676,increases_resistance
-DRV,PI,M36I,36,0.0421,0.68,0.7221,increases_resistance

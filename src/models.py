@@ -35,16 +35,26 @@ class AttentionWeightedClassifier(nn.Module):
     3. Pooling: Weighted average of embeddings
     4. Classifier: Linear layer (equivalent to Logistic Regression)
     """
-    def __init__(self, input_dim: int = 1280, attention_hidden_dim: int = 256):
+    def __init__(
+        self,
+        input_dim: int = 1280,
+        attention_hidden_dim: int = 256,
+        dropout: float = 0.0,
+    ):
         super().__init__()
-        # Attention mechanism
-        self.attention = nn.Sequential(
+        attention_layers: List[nn.Module] = [
             nn.Linear(input_dim, attention_hidden_dim),
             nn.Tanh(),
-            nn.Linear(attention_hidden_dim, 1)
-        )
-        # Classification head
-        self.classifier = nn.Linear(input_dim, 1)
+        ]
+        if dropout > 0:
+            attention_layers.append(nn.Dropout(dropout))
+        attention_layers.append(nn.Linear(attention_hidden_dim, 1))
+        self.attention = nn.Sequential(*attention_layers)
+
+        if dropout > 0:
+            self.classifier = nn.Sequential(nn.Dropout(dropout), nn.Linear(input_dim, 1))
+        else:
+            self.classifier = nn.Linear(input_dim, 1)
         
     def forward(self, x, mask=None, rare_mutation_weights=None):
         """
@@ -79,12 +89,8 @@ class AttentionWeightedClassifier(nn.Module):
             # Re-normalize so weights sum to 1 per sample
             weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-9)
         
-        # Weighted pooling: (batch, 1, seq_len) @ (batch, seq_len, dim) -> (batch, 1, dim)
-        pooled = torch.bmm(weights.unsqueeze(1), x).squeeze(1)
-        
-        # Classification
+        pooled = self.extract_pooled_vectors(x, mask=mask, rare_mutation_weights=rare_mutation_weights)
         logits = self.classifier(pooled)
-        
         return logits, weights
 
     def extract_pooled_vectors(
@@ -116,17 +122,24 @@ class MultiHeadAttentionPoolingClassifier(nn.Module):
     ):
         super().__init__()
         self.n_heads = n_heads
-        self.attention_heads = nn.ModuleList([
-            nn.Sequential(
+        def _make_head() -> nn.Sequential:
+            head_layers: List[nn.Module] = [
                 nn.Linear(input_dim, attention_hidden_dim),
                 nn.Tanh(),
-                nn.Linear(attention_hidden_dim, 1),
-            )
-            for _ in range(n_heads)
-        ])
+            ]
+            if dropout > 0:
+                head_layers.append(nn.Dropout(dropout))
+            head_layers.append(nn.Linear(attention_hidden_dim, 1))
+            return nn.Sequential(*head_layers)
+
+        self.attention_heads = nn.ModuleList([_make_head() for _ in range(n_heads)])
         self.attention_dropout = nn.Dropout(dropout)
+        self.pre_project_dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.project = nn.Linear(n_heads * input_dim, input_dim)
-        self.classifier = nn.Linear(input_dim, 1)
+        if dropout > 0:
+            self.classifier = nn.Sequential(nn.Dropout(dropout), nn.Linear(input_dim, 1))
+        else:
+            self.classifier = nn.Linear(input_dim, 1)
 
     def forward(self, x, mask=None, rare_mutation_weights=None):
         """Return logits and attention weights for each head."""
@@ -140,9 +153,7 @@ class MultiHeadAttentionPoolingClassifier(nn.Module):
             weights = weights * rare_mutation_weights.unsqueeze(-1)
             weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-9)
         weights = self.attention_dropout(weights)
-        pooled = torch.einsum('bsh,bsd->bhd', weights, x)
-        pooled = pooled.view(pooled.size(0), -1)
-        pooled = self.project(pooled)
+        pooled = self.extract_pooled_vectors(x, mask=mask, rare_mutation_weights=rare_mutation_weights)
         logits = self.classifier(pooled)
         return logits, weights
 
@@ -163,8 +174,8 @@ class MultiHeadAttentionPoolingClassifier(nn.Module):
             weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-9)
         pooled = torch.einsum('bsh,bsd->bhd', weights, x)
         pooled = pooled.view(pooled.size(0), -1)
-        pooled = self.project(pooled)
-        return pooled
+        pooled = self.pre_project_dropout(pooled)
+        return self.project(pooled)
 
 
 class EmbeddingDataset(Dataset):
@@ -235,6 +246,7 @@ def train_attention_model(
     val_rare_mutation_weights_list: Optional[List[np.ndarray]] = None,
     input_dim: int = 1280,
     attention_dim: int = 256,
+    dropout: float = 0.0,
     batch_size: int = 32,
     epochs: int = 20,
     lr: float = 1e-4,
@@ -284,7 +296,7 @@ def train_attention_model(
     use_rare_weights = rare_mutation_weights_list is not None
     
     # Init model
-    model = AttentionWeightedClassifier(input_dim, attention_dim).to(device)
+    model = AttentionWeightedClassifier(input_dim, attention_dim, dropout=dropout).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.BCEWithLogitsLoss()
     
