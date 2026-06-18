@@ -28,7 +28,7 @@ python scripts/run_improved_pipeline.py --subset_size 10 --no_optuna
 Full reproduce (recommended):
 
 ```bash
-python scripts/run_improved_pipeline.py --full_data --optuna_trials 50 --results_dir results/improved_pipeline/
+python scripts/run_improved_pipeline.py --full_data --optuna_trials 50 --results_dir results
 ```
 
 Outputs

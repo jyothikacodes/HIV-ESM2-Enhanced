@@ -18,8 +18,11 @@ RUN_TERNARY_CLASSIFICATION = ENABLE_IMPROVED_PIPELINE
 RUN_CALIBRATION_COMPARISON = ENABLE_IMPROVED_PIPELINE
 RUN_EXTENDED_TEMPORAL_VALIDATION = ENABLE_IMPROVED_PIPELINE
 RUN_SHAP_RESIDUE_MAPPING = ENABLE_IMPROVED_PIPELINE
-# Dual SHAP / IG aggregator is very heavy — keep opt-in even in improved mode
+# Dual SHAP / legacy robustness cells are opt-in even in improved mode
 RUN_EXPLAINABILITY_EXTENSIONS = False
+RUN_LEGACY_ROBUSTNESS = False
+# Deprecated standalone Colab appendix at end of notebook 07 (wrong paths / pip conflicts)
+RUN_STANDALONE_COLAB_APPENDIX = False
 RUN_STATISTICAL_VALIDATION = ENABLE_IMPROVED_PIPELINE
 
 # ── Improved pipeline capstone (notebook 07) ────────────────────────────────

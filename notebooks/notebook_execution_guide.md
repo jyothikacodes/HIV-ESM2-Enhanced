@@ -34,14 +34,15 @@ When `True`, notebooks 02–07 automatically enable their prerequisite sections:
 You can also run the improved pipeline standalone:
 
 ```bash
-python run_improved_pipeline.py --full_data --optuna_trials 30
+python scripts/run_improved_pipeline.py --full_data --optuna_trials 30 --results_dir results
 ```
 
-See `PIPELINE_AUDIT_REPORT.md` for the full component audit.
+See `FIX_REPORT.md` and `PIPELINE_AUDIT_REPORT.md` for the component audit and remediation log.
 
 ## Google Colab Notes
 
-- Each notebook starts with a Colab/local setup cell.
+- **Full Colab instructions:** see [`COLAB_SETUP.md`](../COLAB_SETUP.md) at the repository root.
+- Each notebook starts with a unified bootstrap cell (`notebook_setup.bootstrap_notebook_environment`).
 - In Colab, keep the repository at `/content/drive/MyDrive/HIV-ESM-2` or set `REPO_DIR` before running the setup cell.
 - Run GPU notebooks with `Runtime > Change runtime type > GPU`.
 - Heavy optional sections are controlled by `ENABLE_IMPROVED_PIPELINE` in `notebooks/pipeline_config.py`. Individual `RUN_*` toggles in each notebook read from that shared config.

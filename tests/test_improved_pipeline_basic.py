@@ -12,9 +12,11 @@ from src.feature_engineering import HIV_PROTEASE_REFERENCE
 from src.improved_pipeline import (
     apply_oof_calibration,
     build_fusion_features,
+    build_improved_pipeline_config,
     compare_calibration_methods_oof,
     compare_pooling_strategies,
     ensemble_soft_vote_cv,
+    resolve_improved_output_dir,
     stacked_ensemble_cv,
     nested_cv_evaluation,
 )
@@ -29,6 +31,17 @@ def _synthetic_cohort(n=80, embed_dim=32, seq_len=50, seed=0):
     sequences = [HIV_PROTEASE_REFERENCE[:seq_len] for _ in range(n)]
     y = rng.binomial(1, 0.35, size=n).astype(int)
     return per_residue, sequences, y
+
+
+def test_build_improved_pipeline_config_defaults():
+    cfg = build_improved_pipeline_config()
+    assert cfg['use_multihead_attention'] is True
+    assert cfg['nested_model_type'] == 'xgboost_esm'
+
+
+def test_resolve_improved_output_dir():
+    assert resolve_improved_output_dir('results').name == 'improved_pipeline'
+    assert resolve_improved_output_dir('results/improved_pipeline').name == 'improved_pipeline'
 
 
 def test_temperature_scaling():

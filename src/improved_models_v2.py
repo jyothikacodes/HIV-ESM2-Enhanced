@@ -107,12 +107,12 @@ def _fit_classifier_improved(
             eval_metric='auc',
             n_jobs=-1,
             tree_method='hist',
+            early_stopping_rounds=20 if X_val is not None and y_val is not None else None,
         )
         if X_val is not None and y_val is not None:
             model.fit(
                 X_train, y_train,
                 eval_set=[(X_val, y_val)],
-                early_stopping_rounds=20,
                 verbose=False,
             )
         else:

@@ -54,7 +54,7 @@ def main():
     print("=" * 70)
     print("HIV-ESM-2 IMPROVED PIPELINE")
     print("=" * 70)
-    print(f"Phase 1 audit report: PIPELINE_AUDIT_REPORT.md")
+    print(f"Remediation report: FIX_REPORT.md")
     print()
 
     print("Loading cohort for improved pipeline...")

@@ -83,6 +83,15 @@ except ImportError:
 from torch.utils.data import DataLoader
 
 
+# Canonical location for precomputed rare-mutation artifacts (notebooks 02/04).
+RARE_MUTATIONS_SUBDIR = 'rare_mutations'
+
+
+def rare_mutations_dir(data_dir: Union[str, Path]) -> Path:
+    """Return ``data/rare_mutations`` regardless of processed-data layout."""
+    return Path(data_dir) / RARE_MUTATIONS_SUBDIR
+
+
 POOLING_METHODS = ('mean', 'max', 'mean_max', 'attention', 'fusion')
 FEATURE_MODALITIES = (
     'esm_only',
@@ -155,6 +164,11 @@ def build_improved_pipeline_config(
     n_repeats: int = 2,
     optuna_trials: int = 30,
     use_optuna: bool = True,
+    use_multihead_attention: bool = True,
+    attention_n_heads: int = 4,
+    attention_dropout: float = 0.2,
+    nested_model_type: str = 'xgboost_esm',
+    use_stacked_ensemble: bool = True,
 ) -> Dict[str, Any]:
     """Build the config dict consumed by ``run_publication_evaluation``."""
     return {
@@ -164,7 +178,20 @@ def build_improved_pipeline_config(
         'n_repeats': n_repeats,
         'optuna_trials': optuna_trials,
         'use_optuna': use_optuna,
+        'use_multihead_attention': use_multihead_attention,
+        'attention_n_heads': attention_n_heads,
+        'attention_dropout': attention_dropout,
+        'nested_model_type': nested_model_type,
+        'use_stacked_ensemble': use_stacked_ensemble,
     }
+
+
+def resolve_improved_output_dir(results_dir: Union[str, Path]) -> Path:
+    """Return the improved-pipeline output directory without double-nesting."""
+    results_dir = Path(results_dir)
+    if results_dir.name == 'improved_pipeline':
+        return results_dir
+    return results_dir / 'improved_pipeline'
 
 
 BENCHMARK_REFERENCE = {
@@ -263,7 +290,8 @@ def cv_attention_predictions(
     n_heads: int = 4,
     attention_dropout: float = 0.2,  # CHANGE: Increased default dropout (IMPROVEMENT 3)
     return_pooled: bool = False,
-    drug_class: str = None,  # NEW: For per-drug dropout scheduling
+    drug_class: str = None,
+    drug: str = None,
 ) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """
     Out-of-fold attention model predictions with PHASE 5 improvements.
@@ -286,9 +314,8 @@ def cv_attention_predictions(
     y_pred = np.zeros(len(y))
     pooled_features = np.zeros((len(y), input_dim), dtype=np.float32)
     
-    # IMPROVEMENT 3: Per-drug dropout scheduling
-    if drug_class:
-        attention_dropout = get_dropout_schedule(drug_class)
+    if drug_class or drug:
+        attention_dropout = get_dropout_schedule(drug_class, drug)
 
     for train_idx, val_idx in cv.split(np.zeros(len(y)), y):
         x_train = [per_residue_list[i] for i in train_idx]
@@ -437,6 +464,8 @@ def optuna_tune_classifier(
     n_trials: int = 30,
     n_inner_splits: int = 3,
     random_state: int = 42,
+    drug_class: str = None,
+    drug: str = None,
 ) -> Dict[str, Any]:
     """Tune hyperparameters with Optuna on inner stratified CV."""
     if not HAS_OPTUNA:
@@ -450,7 +479,7 @@ def optuna_tune_classifier(
     def objective(trial: optuna.Trial) -> float:
         if model_type == 'logistic':
             params = {'C': trial.suggest_float('C', 1e-3, 10.0, log=True)}
-        elif model_type == 'xgboost':
+        elif model_type in ('xgboost', 'xgboost_esm'):
             params = {
                 'n_estimators': trial.suggest_int('n_estimators', 100, 500),
                 'max_depth': trial.suggest_int('max_depth', 3, 10),
@@ -481,7 +510,8 @@ def optuna_tune_classifier(
         fold_aucs = []
         for train_idx, val_idx in cv.split(X, y):
             model, scaler = _fit_classifier(
-                model_type, X[train_idx], y[train_idx], params=params, random_state=random_state
+                model_type, X[train_idx], y[train_idx], params=params, random_state=random_state,
+                drug_class=drug_class, drug=drug,
             )
             preds = _predict_classifier(model_type, model, scaler, X[val_idx])
             fold_aucs.append(roc_auc_score(y[val_idx], preds))
@@ -664,6 +694,8 @@ def nested_cv_evaluation(
     apply_shap_selection: bool = False,
     shap_top_fraction: float = 0.8,
     random_state: int = 42,
+    drug_class: str = None,
+    drug: str = None,
 ) -> Dict[str, Any]:
     """
     Nested stratified CV with optional inner Optuna tuning.
@@ -701,6 +733,8 @@ def nested_cv_evaluation(
                     n_trials=optuna_trials,
                     n_inner_splits=inner_splits,
                     random_state=seed,
+                    drug_class=drug_class,
+                    drug=drug,
                 )
                 best_params = tune_res.get('best_params', best_params)
 
@@ -717,6 +751,8 @@ def nested_cv_evaluation(
                     X_val=x_train[inner_val_idx],
                     y_val=y_train[inner_val_idx],
                     random_state=seed,
+                    drug_class=drug_class,
+                    drug=drug,
                 )
                 oof[inner_val_idx] = _predict_classifier(
                     model_type, model, scaler, x_train[inner_val_idx]
@@ -732,7 +768,8 @@ def nested_cv_evaluation(
                 val_aucs.append(roc_auc_score(y_train, oof))
 
             final_model, final_scaler = _fit_classifier(
-                model_type, x_train, y_train, params=best_params, random_state=seed
+                model_type, x_train, y_train, params=best_params, random_state=seed,
+                drug_class=drug_class, drug=drug,
             )
             test_pred = _predict_classifier(model_type, final_model, final_scaler, x_test)
             if len(np.unique(y_test)) > 1:
@@ -965,6 +1002,8 @@ def evaluate_temporal_drug(
     seq_id_col: Optional[str] = None,
     cutoff_quantile: float = 0.8,
     random_state: int = 42,
+    drug_class: str = None,
+    drug: str = None,
 ) -> Dict[str, Any]:
     """Temporal holdout evaluation on fusion features for a single drug."""
     seq_col = seq_id_col
@@ -1019,6 +1058,8 @@ def evaluate_temporal_drug(
         y_train,
         params=params or {},
         random_state=random_state,
+        drug_class=drug_class,
+        drug=drug,
     )
     y_pred = _predict_classifier(model_type, model, scaler, x_test)
     temporal_auc = float(roc_auc_score(y_test, y_pred))
@@ -1066,9 +1107,10 @@ def evaluate_drug_improved(
     )
     modality_df = compare_feature_modalities(x_list, seq_valid, reference, y, norm_weights, random_state=seed)
 
-    use_multihead = config.get('use_multihead_attention', False)
+    use_multihead = config.get('use_multihead_attention', True)
     n_heads = config.get('attention_n_heads', 4)
-    attention_dropout = config.get('attention_dropout', 0.1)
+    attention_dropout = config.get('attention_dropout', 0.2)
+    nested_model_type = config.get('nested_model_type', 'xgboost_esm')
     _, attn_pooled = cv_attention_predictions(
         x_list,
         y,
@@ -1078,6 +1120,8 @@ def evaluate_drug_improved(
         n_heads=n_heads,
         attention_dropout=attention_dropout,
         return_pooled=True,
+        drug_class=drug_class,
+        drug=drug,
     )
     drm_features = compute_drm_position_features(
         seq_valid,
@@ -1099,13 +1143,15 @@ def evaluate_drug_improved(
     nested = nested_cv_evaluation(
         fusion_x,
         y,
-        model_type='xgboost',
+        model_type=nested_model_type,
         outer_splits=config.get('outer_splits', 5),
         inner_splits=config.get('inner_splits', 3),
         n_repeats=config.get('n_repeats', 1),
         tune_with_optuna=use_optuna,
         optuna_trials=config.get('optuna_trials', 20),
         random_state=seed,
+        drug_class=drug_class,
+        drug=drug,
     )
 
     baseline_nested = nested_cv_evaluation(
@@ -1122,7 +1168,7 @@ def evaluate_drug_improved(
     nested_shap = nested_cv_evaluation(
         fusion_x,
         y,
-        model_type='xgboost',
+        model_type=nested_model_type,
         params=nested.get('best_params'),
         outer_splits=config.get('outer_splits', 5),
         n_repeats=1,
@@ -1130,6 +1176,8 @@ def evaluate_drug_improved(
         apply_shap_selection=True,
         shap_top_fraction=0.8,
         random_state=seed,
+        drug_class=drug_class,
+        drug=drug,
     )
 
     xgb_params = nested.get('best_params') or {}
@@ -1157,9 +1205,11 @@ def evaluate_drug_improved(
         y,
         drug_pheno,
         cv_auc=nested.get('val_auc', np.nan),
-        model_type='xgboost',
+        model_type=nested_model_type,
         params=xgb_params,
         random_state=seed,
+        drug_class=drug_class,
+        drug=drug,
     )
 
     ternary_res = per_drug_ternary_training(
@@ -1250,7 +1300,7 @@ def run_publication_evaluation(
     Run full improved pipeline across all drugs and write publication outputs.
     """
     results_dir = Path(results_dir)
-    improved_dir = results_dir / 'improved_pipeline'
+    improved_dir = resolve_improved_output_dir(results_dir)
     fig_dir = improved_dir / 'figures'
     improved_dir.mkdir(parents=True, exist_ok=True)
     fig_dir.mkdir(parents=True, exist_ok=True)
@@ -1487,7 +1537,9 @@ def run_publication_evaluation(
     pd.DataFrame(ece_rows).to_csv(improved_dir / 'ece_scores.csv', index=False)
     pd.DataFrame(brier_rows).to_csv(improved_dir / 'brier_scores.csv', index=False)
     pd.DataFrame(ternary_rows).to_csv(improved_dir / 'ternary_classification_results.csv', index=False)
-    pd.DataFrame(nested_rows).to_csv(improved_dir / 'nested_cv_results.csv', index=False)
+    nested_cols = ['drug', 'drug_class', 'train_auc', 'val_auc', 'test_auc', 'auc_drop']
+    nested_df = pd.DataFrame(nested_rows, columns=nested_cols) if nested_rows else pd.DataFrame(columns=nested_cols)
+    nested_df.to_csv(improved_dir / 'nested_cv_results.csv', index=False)
     pd.DataFrame(temporal_rows).to_csv(improved_dir / 'temporal_validation.csv', index=False)
     pd.DataFrame(baseline_comparison_rows).to_csv(improved_dir / 'baseline_comparison.csv', index=False)
     if hyperparameter_rows:

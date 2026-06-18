@@ -1,0 +1,14 @@
+# Colab-friendly dependency set (does not pin torch; Colab provides CUDA builds).
+fair-esm==2.0.0
+scikit-learn==1.8.0
+xgboost==3.2.0
+shap==0.51.0
+pandas==3.0.0
+numpy==2.4.0
+scipy==1.17.0
+matplotlib==3.10.9
+seaborn==0.13.2
+biopython==1.87
+tqdm==4.67.1
+openpyxl==3.1.5
+optuna>=3.0.0

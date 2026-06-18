@@ -16,6 +16,6 @@ ipywidgets==8.1.8
 ipykernel==7.2.0
 
 # Optional / repository-specific extras (not installed by default)
-# optuna>=3.0.0 # Optional for hyperparameter tuning in improved pipeline
+optuna>=3.0.0  # Required for default improved-pipeline hyperparameter tuning
 # lightgbm>=4.0.0 # Optional ensemble model member
 # esm>=3.0.0 # Optional (causes namespace conflict with fair-esm; install only if using ESM C comparison in plm_comparison.py)
