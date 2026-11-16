@@ -15,7 +15,9 @@ embeddings/
 *.pkl
 *.pickle
 *.joblib
-models/
+# Model weight directories
+/models/
+!src/models/
 
 # Results and figures: track evaluation CSV metrics and summary figures
 !results/
