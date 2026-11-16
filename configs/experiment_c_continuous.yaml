@@ -1,0 +1,24 @@
+# Experiment C: Continuous & Ordinal Fold-Change Resistance Modeling
+# Hypothesizes that predicting continuous log10(Fold-Change) prevents information loss
+# and resolves severe class imbalance on drugs with low resistant counts (e.g. TDF).
+
+experiment_name: "experiment_c_continuous_log_fc"
+target_transformation: "log10_fold_change"
+clinical_cutoffs: "drug_specific_ias_usa"
+
+models:
+  - type: "ridge"
+    alpha: 1.0
+  - type: "elasticnet"
+    alpha: 0.5
+    l1_ratio: 0.5
+  - type: "gradient_boosting"
+    max_depth: 4
+    learning_rate: 0.05
+    n_estimators: 150
+
+evaluation:
+  continuous_metrics: ["r2", "rmse", "mae", "pearson_r", "spearman_rho"]
+  ordinal_metrics: ["balanced_accuracy", "macro_f1"]
+  outer_folds: 5
+  grouping_strategy: "sequence_clustered"

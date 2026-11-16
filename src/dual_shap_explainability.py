@@ -22,7 +22,10 @@ import seaborn as sns
 from scipy.stats import hypergeom, fisher_exact
 
 from sklearn.linear_model import LogisticRegression
-import shap
+try:
+    import shap
+except ImportError:
+    shap = None
 
 # Set styling for premium visualizations
 plt.style.use('seaborn-v0_8-whitegrid')

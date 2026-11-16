@@ -1,0 +1,27 @@
+# Baseline Experiment: Binary Mutation Encoding with XGBoost
+# Replicates standard clinical benchmark without PLM embeddings
+
+experiment_name: "baseline_mutation_xgboost"
+model_type: "xgboost"
+data:
+  features: "binary_mutation_vector"
+  reference_sequences:
+    PI: "data/references/protease_consensus.fasta"
+    RT: "data/references/rt_consensus.fasta"
+  drug_classes: ["PI", "NRTI", "NNRTI"]
+  clinical_cutoffs: "standard_ias_usa"
+
+validation:
+  outer_folds: 5
+  inner_folds: 3
+  grouping_strategy: "sequence_clustered"
+  identity_threshold: 0.95
+  random_state: 42
+
+hyperparameters:
+  max_depth: 4
+  n_estimators: 200
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  scale_pos_weight: "balanced"

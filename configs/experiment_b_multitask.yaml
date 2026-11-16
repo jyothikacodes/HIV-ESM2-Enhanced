@@ -1,0 +1,24 @@
+# Experiment B: Biologically Informed Masked Multi-Task Learning
+# Hypothesizes that cross-resistance mechanisms (e.g. M184V, K65R, protease active site mutations)
+# can be shared across drugs within the same class while strictly masking unmeasured phenotypes.
+
+experiment_name: "experiment_b_masked_multitask"
+architecture:
+  trunk_hidden_dims: [512, 256]
+  dropout: 0.3
+  use_uncertainty_weighting: true
+  learning_rate: 0.001
+  batch_size: 64
+  max_epochs: 50
+  optimizer: "AdamW"
+  weight_decay: 0.0001
+
+loss:
+  type: "MaskedMultiTaskBCELoss"
+  mask_unmeasured_nan: true
+
+validation:
+  outer_folds: 5
+  inner_folds: 3
+  grouping_strategy: "patient_grouped"
+  identity_threshold: 0.95

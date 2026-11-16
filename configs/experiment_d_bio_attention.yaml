@@ -1,0 +1,30 @@
+# Experiment D: Prior-Guided / Biologically Constrained Attention
+# Hypothesizes that anchoring attention scores with consensus DRM positions
+# prevents overfitting to clade-specific polymorphisms while preserving PLM context.
+
+experiment_name: "experiment_d_biologically_guided_attention"
+architecture:
+  embed_dim: 1280
+  attention_hidden_dim: 128
+  use_mutation_indicator: true
+  use_prior_drm: true
+  dropout: 0.2
+
+drm_priors:
+  source: "IAS-USA_2022_and_Stanford_HIVDB"
+  protease_positions: [23, 29, 31, 45, 46, 47, 49, 53, 75, 81, 83, 87, 89]
+  rt_nrti_positions: [40, 64, 66, 69, 73, 74, 114, 150, 183, 209, 214, 218]
+  rt_nnrti_positions: [99, 100, 102, 105, 137, 178, 180, 187, 189, 224, 229]
+
+training:
+  batch_size: 32
+  learning_rate: 0.0005
+  weight_decay: 0.001
+  max_epochs: 40
+  early_stopping_patience: 8
+
+validation:
+  outer_folds: 5
+  inner_folds: 3
+  grouping_strategy: "sequence_clustered"
+  identity_threshold: 0.95

@@ -18,7 +18,10 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 from tqdm import tqdm
 
 

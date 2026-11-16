@@ -1,0 +1,25 @@
+# Experiment A: Reference-Contrastive Delta-Embedding Representations (ΔE)
+# Hypothesizes that subtracting wildtype consensus embeddings isolates local
+# and allosteric biophysical perturbations caused by resistance mutations.
+
+experiment_name: "experiment_a_reference_delta"
+representation:
+  mode: "mutant_plus_delta"  # [mutant_only, delta_only, mutant_plus_delta, mutant_delta_mutation]
+  pooling: "mean"            # [mean, max, norm]
+  esm_model: "esm2_t33_650M_UR50D"
+  embed_dim: 1280
+
+model:
+  type: "xgboost"
+  learning_rate: 0.05
+  max_depth: 5
+  n_estimators: 250
+  regularization_alpha: 0.1
+
+validation:
+  outer_folds: 5
+  inner_folds: 3
+  grouping_strategy: "sequence_clustered"
+  identity_threshold: 0.95
+  metrics: ["auc", "average_precision", "brier_score", "f1"]
+  statistical_comparisons: ["delong", "bootstrap_ci"]

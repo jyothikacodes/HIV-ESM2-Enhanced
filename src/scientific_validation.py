@@ -16,9 +16,14 @@ import os
 import sys
 import numpy as np
 import pandas as pd
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
+try:
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader
+except ImportError:
+    torch = None
+    nn = None
+    DataLoader = None
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
 import matplotlib.pyplot as plt

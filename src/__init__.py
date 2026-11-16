@@ -26,4 +26,6 @@ from . import calibration
 from . import dual_shap_explainability
 from . import counterfactual_mutation_analysis
 from . import scientific_validation
+from . import representations
+from . import analysis
 
