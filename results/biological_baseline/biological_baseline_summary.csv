@@ -1,0 +1,4 @@
+drug,drug_class,n_samples,binary_cutoff,resistant_pct,binary_lr_auc,binary_lr_auc_ci_low,binary_lr_auc_ci_high,binary_lr_pr_auc,binary_lr_bal_acc,binary_lr_brier,binary_lr_ece,binary_gb_auc,continuous_ridge_r2,continuous_ridge_rmse,continuous_ridge_spearman,continuous_ridge_mapped_bal_acc,continuous_gb_r2,continuous_gb_rmse,continuous_gb_spearman,continuous_gb_mapped_bal_acc
+ATV,PI,1505,3.0,52.89,0.9851,0.9802,0.9891,0.9867,0.9286,0.0472,0.0268,0.9826,0.8686,0.2915,0.9102,0.9325,0.8525,0.3089,0.9007,0.9235
+TDF,NRTI,1548,1.5,31.85,0.92,0.9059,0.9334,0.8494,0.8241,0.1055,0.0338,0.9159,0.6543,0.1867,0.8142,0.8367,0.6448,0.1893,0.7857,0.8121
+EFV,NNRTI,2168,3.0,46.03,0.9837,0.9788,0.9882,0.983,0.9446,0.0441,0.0426,0.9794,0.8309,0.3883,0.9114,0.9485,0.8407,0.3769,0.9093,0.9422
