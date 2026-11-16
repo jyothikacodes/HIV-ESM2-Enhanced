@@ -228,10 +228,152 @@ class EpistaticInteractionClassifier:
                     "weight": float(w),
                     "abs_weight": abs(float(w)),
                     "cooccurrence": self.encoder.pair_cooccurrences.get((mut_a, mut_b), 0),
-                    "interaction_type": "synergistic" if w > 0 else "antagonistic"
+                    # Positive weight in regularized logistic model indicates positive statistical
+                    # association conditional on main effects; must not be conflated with verified
+                    # biochemical synergy due to potential subtype/lineage confounding.
+                    "interaction_type": "positive_association" if w > 0 else "negative_association"
                 })
                 
         df = pd.DataFrame(records)
         if not df.empty:
             df = df.sort_values("abs_weight", ascending=False).reset_index(drop=True)
         return df.head(top_k)
+
+
+def compare_main_effects_vs_interactions(
+    sequences: List[str],
+    y: np.ndarray,
+    reference_seq: str,
+    n_splits: int = 5,
+    min_cooccurrence: int = 5,
+    max_interactions: int = 50,
+    random_state: int = 42
+) -> Dict[str, Union[float, Dict, pd.DataFrame]]:
+    """
+    Rigorously compare Main-Effects-Only model vs Main-Effects-Plus-Interactions model.
+    
+    Statistical Formulation:
+        Model 0 (Main Effects Only):
+            logit(P(Y=1)) = beta_0 + sum_j beta_j * X_j
+        Model 1 (Main Effects + Pairwise Interactions):
+            logit(P(Y=1)) = beta_0 + sum_j beta_j * X_j + sum_{j < k} gamma_{jk} * (X_j * X_k)
+            
+    Evaluation Protocol:
+        - Out-of-fold cross-validation on identical CV folds.
+        - Evaluates incremental predictive value on test folds (AUC, Log-Loss/Cross-Entropy).
+        - Tests for statistical interaction significance (paired Wilcoxon test on fold log-losses).
+        - Measures interaction coefficient stability (mean, std, sign consistency across folds).
+        - Prevents confusing positive statistical regression weights with biochemical synergy.
+    """
+    from sklearn.model_selection import StratifiedKFold
+    from sklearn.metrics import roc_auc_score, log_loss
+    
+    valid = ~np.isnan(y)
+    seqs_clean = [sequences[i] for i in range(len(sequences)) if valid[i]]
+    y_clean = y[valid].astype(int)
+    N = len(seqs_clean)
+    
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    
+    oof_p_main = np.zeros(N)
+    oof_p_comb = np.zeros(N)
+    
+    fold_log_loss_main = []
+    fold_log_loss_comb = []
+    fold_auc_main = []
+    fold_auc_comb = []
+    
+    pair_weights_by_fold: Dict[str, List[float]] = {}
+    
+    for tr_idx, te_idx in skf.split(seqs_clean, y_clean):
+        tr_seqs = [seqs_clean[i] for i in tr_idx]
+        te_seqs = [seqs_clean[i] for i in te_idx]
+        y_tr = y_clean[tr_idx]
+        y_te = y_clean[te_idx]
+        
+        # Fit main effects only
+        clf_main = EpistaticInteractionClassifier(
+            reference_seq=reference_seq,
+            mode="mutation_only",
+            min_cooccurrence=min_cooccurrence,
+            random_state=random_state
+        ).fit(tr_seqs, y_tr)
+        
+        p_te_main = clf_main.predict_proba(te_seqs)[:, 1]
+        oof_p_main[te_idx] = p_te_main
+        
+        # Fit combined model (main + interactions)
+        clf_comb = EpistaticInteractionClassifier(
+            reference_seq=reference_seq,
+            mode="combined",
+            min_cooccurrence=min_cooccurrence,
+            max_interactions=max_interactions,
+            random_state=random_state
+        ).fit(tr_seqs, y_tr)
+        
+        p_te_comb = clf_comb.predict_proba(te_seqs)[:, 1]
+        oof_p_comb[te_idx] = p_te_comb
+        
+        # Fold metrics
+        eps = 1e-15
+        p_main_clip = np.clip(p_te_main, eps, 1 - eps)
+        p_comb_clip = np.clip(p_te_comb, eps, 1 - eps)
+        
+        fold_log_loss_main.append(log_loss(y_te, p_main_clip))
+        fold_log_loss_comb.append(log_loss(y_te, p_comb_clip))
+        fold_auc_main.append(roc_auc_score(y_te, p_te_main))
+        fold_auc_comb.append(roc_auc_score(y_te, p_te_comb))
+        
+        # Record interaction weights
+        top_pairs = clf_comb.extract_top_interactions(top_k=max_interactions)
+        for _, r in top_pairs.iterrows():
+            pair_weights_by_fold.setdefault(r["pair"], []).append(r["weight"])
+            
+    # Aggregate OOF metrics
+    oof_auc_main = float(roc_auc_score(y_clean, oof_p_main))
+    oof_auc_comb = float(roc_auc_score(y_clean, oof_p_comb))
+    oof_loss_main = float(log_loss(y_clean, np.clip(oof_p_main, 1e-15, 1 - 1e-15)))
+    oof_loss_comb = float(log_loss(y_clean, np.clip(oof_p_comb, 1e-15, 1 - 1e-15)))
+    
+    # Statistical significance of incremental improvement
+    # Paired Wilcoxon signed-rank test on fold log-losses (lower is better)
+    diff_loss = np.array(fold_log_loss_main) - np.array(fold_log_loss_comb)
+    try:
+        w_stat, p_value = stats.wilcoxon(diff_loss, alternative="greater")
+    except Exception:
+        p_value = 1.0
+        
+    # Analyze interaction stability across folds
+    stability_records = []
+    for pair, weights in pair_weights_by_fold.items():
+        n_folds_present = len(weights)
+        mean_w = float(np.mean(weights))
+        std_w = float(np.std(weights)) if len(weights) > 1 else 0.0
+        # Sign consistency: fraction of folds sharing the majority sign
+        pos_frac = sum(1 for w in weights if w > 0) / n_folds_present
+        stability_records.append({
+            "pair": pair,
+            "folds_detected": n_folds_present,
+            "detection_rate": n_folds_present / n_splits,
+            "mean_weight": round(mean_w, 4),
+            "std_weight": round(std_w, 4),
+            "sign_consistency": round(max(pos_frac, 1.0 - pos_frac), 2),
+            "stable": (n_folds_present >= (n_splits // 2 + 1)) and (max(pos_frac, 1.0 - pos_frac) >= 0.8)
+        })
+        
+    stability_df = pd.DataFrame(stability_records)
+    if not stability_df.empty:
+        stability_df = stability_df.sort_values(["detection_rate", "sign_consistency"], ascending=False).reset_index(drop=True)
+        
+    return {
+        "oof_auc_main_effects": round(oof_auc_main, 4),
+        "oof_auc_combined": round(oof_auc_comb, 4),
+        "auc_difference": round(oof_auc_comb - oof_auc_main, 4),
+        "oof_log_loss_main_effects": round(oof_loss_main, 4),
+        "oof_log_loss_combined": round(oof_loss_comb, 4),
+        "log_loss_reduction": round(oof_loss_main - oof_loss_comb, 4),
+        "incremental_improvement_p_value": round(float(p_value), 4),
+        "interaction_significantly_better": bool(p_value < 0.05 and (oof_loss_comb < oof_loss_main)),
+        "stability_analysis": stability_df
+    }
+

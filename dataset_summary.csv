@@ -1,0 +1,4 @@
+dataset_key,filename,target_gene,protein_name,file_size_bytes,total_records,unique_seq_ids,duplicate_seq_ids,unique_sequences,duplicate_sequences,position_columns_count,position_range,drugs_present,drug_count,has_patient_id_col,has_subtype_col,has_assay_col,has_compmutlist_col
+PI,PI_DataSet.txt,PR,Protease,654360,2171,2171,0,2038,133,99,P1-P99,FPV; ATV; IDV; LPV; NFV; SQV; TPV; DRV,8,False,False,False,True
+NRTI,NRTI_DataSet.txt,RT,Reverse Transcriptase,1155388,1867,1844,23,1812,55,240,P1-P240,3TC; ABC; AZT; D4T; DDI; TDF,6,False,False,False,True
+NNRTI,NNRTI_DataSet.txt,RT,Reverse Transcriptase,1734850,2272,2272,0,2126,146,318,P1-P318,EFV; NVP; ETR; RPV; DOR,5,False,False,False,True
