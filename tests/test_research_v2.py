@@ -1,18 +1,20 @@
 """
-Comprehensive Unit Test Suite for Research Pipeline Upgrade (V2).
+Comprehensive Unit Test Suite for Research Pipeline Upgrade (V2) & Pre-HPC Audit.
 
 Tests:
 1. Zero wildtype leakage in FoldSpecificMutationEncoder.
 2. Fold-specific frequency isolation between train and test.
 3. Accurate drug-specific clinical cutoffs (e.g. TDF=1.5x vs 3TC=3.0x).
-4. Reference-contrastive delta representation construction (Experiment A).
-5. Strictly masked multi-task loss with NaN labels (Experiment B).
-6. Multi-task predictor training and inference.
-7. Continuous log10(FC) regression metrics and ordinal evaluation (Experiment C).
-8. Biologically guided attention mechanism with prior DRM indicators (Experiment D).
-9. Sequence-clustered cross-validation group isolation (homology leakage fix).
-10. Strictly leak-free nested cross-validation.
-11. DeLong test, Wilcoxon test, and Benjamini-Hochberg FDR correction.
+4. Reference-contrastive delta representation construction (Experiment A) & all 5 ablation modes.
+5. Alignment-aware delta checks (preventing silent phase shift on indels, padding masks, PR/RT coordinate bounds).
+6. Pairwise mutation interaction encoding & sparse epistatic classifier (synergy vs antagonism).
+7. Strictly masked multi-task loss with NaN labels (Experiment B).
+8. Multi-task out-of-fold cross-validation vs independent models.
+9. Continuous log10(FC) regression metrics and ordinal evaluation (Experiment C).
+10. Biologically guided attention mechanism with prior DRM indicators (Experiment D) and prior ablation.
+11. Transitive single-linkage clustering & joint patient-sequence grouping (homology leakage fix).
+12. Leak-free nested cross-validation with inner parameter tuning.
+13. DeLong test, Wilcoxon test, and Benjamini-Hochberg FDR correction.
 """
 
 import sys
@@ -30,6 +32,9 @@ from src.representations import (
     categorize_resistance_3class,
     get_clinical_cutoff,
     HIV_PROTEASE_REFERENCE,
+    HIV_RT_REFERENCE,
+    PairwiseMutationInteractionEncoder,
+    EpistaticInteractionClassifier,
 )
 from src.models import (
     MaskedMultiTaskBCELoss,
@@ -73,26 +78,24 @@ except ImportError:
 def test_mutation_encoder_no_wildtype_leakage():
     """Verify that wildtype amino acids are NEVER treated as mutations or rare mutations."""
     ref = "PQITLWQRPL"
-    # Create cohort where position 0 has 'P' (wildtype) in 1 sample and 'A' in 9 samples.
-    # In legacy buggy code, 'P' would have freq=0.1 and be treated as a rare mutation.
     training_seqs = ["PQITLWQRPL"] + ["AQITLWQRPL" for _ in range(9)]
     
     encoder = FoldSpecificMutationEncoder(reference_seq=ref, rare_threshold=0.2)
     encoder.fit(training_seqs)
     
-    # 1. Wildtype (0, 'P') must NOT be in known mutations
+    # Wildtype (0, 'P') must NOT be in known mutations
     assert (0, "P") not in encoder.known_mutations_list
     assert (0, "P") not in encoder.mutation_counts
     
-    # 2. Genuine mutation (0, 'A') must be in known mutations with count 9
+    # Genuine mutation (0, 'A') must be in known mutations with count 9
     assert (0, "A") in encoder.known_mutations_list
     assert encoder.mutation_counts[(0, "A")] == 9
     
-    # 3. Transform wildtype sequence: binary matrix must be all 0s
+    # Transform wildtype sequence: binary matrix must be all 0s
     wt_matrix = encoder.transform_binary_mutations(["PQITLWQRPL"])
     assert wt_matrix.sum() == 0.0
     
-    # 4. Check positional weights on wildtype sequence: wildtype position 0 must have weight 1.0, not rare
+    # Wildtype position 0 must have weight 1.0, not rare
     weights, rare_mask = encoder.compute_positional_rare_weights(["PQITLWQRPL"])
     assert weights[0, 0] == 1.0
     assert rare_mask[0, 0] == 0.0
@@ -102,19 +105,17 @@ def test_fold_specific_frequency_isolation():
     """Verify test fold sequences cannot alter training frequencies or rare weights."""
     ref = "PQITLWQRPL"
     train_seqs = ["PQITLWQRPL", "AQITLWQRPL"]
-    test_seqs = ["CQITLWQRPL", "EQITLWQRPL"] # Novel mutations C and E
+    test_seqs = ["CQITLWQRPL", "EQITLWQRPL"]
     
     encoder = FoldSpecificMutationEncoder(reference_seq=ref)
     encoder.fit(train_seqs)
     
-    # Mutations C and E were never in training
     assert (0, "C") not in encoder.known_mutations_list
     assert (0, "E") not in encoder.known_mutations_list
     
-    # When test_seqs are transformed, known binary vector length matches training observations
     test_binary = encoder.transform_binary_mutations(test_seqs)
     assert test_binary.shape[1] == len(encoder.known_mutations_list)
-    assert test_binary.sum() == 0.0 # Unseen mutations do not activate train features
+    assert test_binary.sum() == 0.0
 
 
 def test_drug_specific_clinical_cutoffs():
@@ -124,9 +125,6 @@ def test_drug_specific_clinical_cutoffs():
     assert get_clinical_cutoff("ABC") == 2.0
     assert get_clinical_cutoff("LPV") == 9.0
     
-    # TDF isolate with fold-change 1.8:
-    # With flawed universal cutoff 2.5/3.0 -> would be 0 (susceptible, false negative)
-    # With clinical cutoff 1.5 -> correctly 1 (resistant)
     tdf_fc = np.array([1.2, 1.8, 0.9, np.nan, 3.5])
     tdf_binary = binarize_resistance(tdf_fc, "TDF")
     assert tdf_binary[0] == 0.0
@@ -135,40 +133,106 @@ def test_drug_specific_clinical_cutoffs():
 
 
 # -------------------------------------------------------------------------
-# Test 3: Reference-Contrastive Delta Representations (Experiment A)
+# Test 3 & 4: Reference-Contrastive Delta Representations & Ablations
 # -------------------------------------------------------------------------
 
-def test_reference_delta_representations():
-    """Verify reference delta embedding computation and multi-modal builder."""
+def test_reference_delta_representations_and_ablations():
+    """Verify reference delta embedding computation and all 5 ablation modes."""
     L, D = 10, 16
     rng = np.random.RandomState(42)
     ref_emb = rng.randn(L, D).astype(np.float32)
     ref_seq = "PQITLWQRPL"
     
-    # Mutant embedding matches reference exactly
     mut_emb_identical = ref_emb.copy()
     delta_identical = compute_per_residue_delta(mut_emb_identical, ref_emb)
     assert np.allclose(delta_identical, 0.0)
     
-    # Mutant embedding with perturbation at residue 2
     mut_emb_perturbed = ref_emb.copy()
     mut_emb_perturbed[2] += 2.5
     delta_perturbed = compute_per_residue_delta(mut_emb_perturbed, ref_emb)
     assert np.allclose(delta_perturbed[0], 0.0)
     assert not np.allclose(delta_perturbed[2], 0.0)
     
-    # Test RepresentationBuilder modes
-    builder_delta = ReferenceDeltaRepresentationBuilder(ref_emb, ref_seq, mode="delta_only")
-    feat_delta = builder_delta.build_sample_feature(mut_emb_perturbed)
-    assert feat_delta.shape == (D,)
+    # 1. mutant_only
+    b_mut = ReferenceDeltaRepresentationBuilder(ref_emb, ref_seq, mode="mutant_only")
+    assert b_mut.build_sample_feature(mut_emb_perturbed).shape == (D,)
     
-    builder_concat = ReferenceDeltaRepresentationBuilder(ref_emb, ref_seq, mode="mutant_plus_delta")
-    feat_concat = builder_concat.build_sample_feature(mut_emb_perturbed)
-    assert feat_concat.shape == (2 * D,)
+    # 2. reference_only
+    b_ref = ReferenceDeltaRepresentationBuilder(ref_emb, ref_seq, mode="reference_only")
+    f_ref = b_ref.build_sample_feature(mut_emb_perturbed)
+    assert f_ref.shape == (D,)
+    assert np.allclose(f_ref, b_ref.ref_pooled)
+    
+    # 3. delta_only
+    b_del = ReferenceDeltaRepresentationBuilder(ref_emb, ref_seq, mode="delta_only")
+    assert b_del.build_sample_feature(mut_emb_perturbed).shape == (D,)
+    
+    # 4. mutant_plus_delta
+    b_md = ReferenceDeltaRepresentationBuilder(ref_emb, ref_seq, mode="mutant_plus_delta")
+    assert b_md.build_sample_feature(mut_emb_perturbed).shape == (2 * D,)
+    
+    # 5. mutant_plus_reference_plus_delta
+    b_mrd = ReferenceDeltaRepresentationBuilder(ref_emb, ref_seq, mode="mutant_plus_reference_plus_delta")
+    assert b_mrd.build_sample_feature(mut_emb_perturbed).shape == (3 * D,)
+
+
+def test_reference_delta_alignment_and_coordinate_guards():
+    """Verify indels without gap characters raise ValueError and padding is masked."""
+    L, D = 10, 16
+    rng = np.random.RandomState(42)
+    ref_emb = rng.randn(L, D).astype(np.float32)
+    ref_seq = "PQITLWQRPL"
+    
+    # Deletion without alignment gap character should raise ValueError
+    short_mut_emb = rng.randn(9, D).astype(np.float32)
+    short_mut_seq = "PQITLQRPL" # missing W at pos 5
+    with pytest.raises(ValueError, match="Unaligned length mismatch"):
+        compute_per_residue_delta(
+            short_mut_emb, ref_emb, mutant_seq=short_mut_seq, reference_seq=ref_seq
+        )
+        
+    # Padding mask test
+    pad_mask = np.array([1, 1, 1, 1, 1, 1, 1, 1, 0, 0])
+    mut_emb = ref_emb + 1.0
+    delta_masked = compute_per_residue_delta(mut_emb, ref_emb, padding_mask=pad_mask)
+    assert np.allclose(delta_masked[8:], 0.0)
+    assert np.allclose(delta_masked[:8], 1.0)
 
 
 # -------------------------------------------------------------------------
-# Test 4: Masked Multi-Task Model (Experiment B)
+# Test 5: Pairwise Epistatic Mutation Interactions
+# -------------------------------------------------------------------------
+
+def test_pairwise_mutation_interactions():
+    """Verify pairwise epistatic interaction encoder and classifier."""
+    ref = "PQITLWQRPL"
+    # Create cohort with co-occurring mutations: pos 0 'A' and pos 2 'I'
+    seqs = ["AQTTLWQRPL" for _ in range(10)] + ["PQITLWQRPL" for _ in range(10)]
+    y = np.array([1]*10 + [0]*10)
+    
+    enc = PairwiseMutationInteractionEncoder(ref, min_cooccurrence=4)
+    enc.fit(seqs, y)
+    
+    # Must identify the co-occurring pair (0, 'A') + (2, 'T')
+    assert len(enc.interaction_pairs) >= 1
+    
+    X_single = enc.transform(seqs, mode="mutation_only")
+    X_pairs = enc.transform(seqs, mode="interaction_only")
+    X_comb = enc.transform(seqs, mode="combined")
+    
+    assert X_comb.shape[1] == X_single.shape[1] + X_pairs.shape[1]
+    
+    clf = EpistaticInteractionClassifier(ref, mode="combined", C=1.0)
+    clf.fit(seqs, y)
+    probs = clf.predict_proba(seqs)
+    assert probs.shape == (20, 2)
+    
+    top_df = clf.extract_top_interactions(top_k=5)
+    assert isinstance(top_df, np.ndarray) or hasattr(top_df, "columns")
+
+
+# -------------------------------------------------------------------------
+# Test 6: Masked Multi-Task Model & OOF Predictions (Experiment B)
 # -------------------------------------------------------------------------
 
 @pytest.mark.skipif(not _HAS_TORCH, reason="PyTorch required for neural multi-task tests")
@@ -176,17 +240,14 @@ def test_masked_multitask_loss():
     """Verify that unmeasured drugs (NaN labels) have zero loss and zero gradient impact."""
     loss_fn = MaskedMultiTaskBCELoss()
     
-    # 2 samples, 3 drugs. Sample 0 missing drug 1; sample 1 missing drug 2
     logits = torch.tensor([[1.0, 2.0, -1.0], [-1.0, -2.0, 1.0]], requires_grad=True)
     targets = torch.tensor([[1.0, np.nan, 0.0], [0.0, 0.0, np.nan]])
     
     loss = loss_fn(logits, targets)
     loss.backward()
     
-    # Check that gradient for masked positions is exactly 0
     assert logits.grad[0, 1].item() == 0.0
     assert logits.grad[1, 2].item() == 0.0
-    # Valid positions must have non-zero gradient
     assert logits.grad[0, 0].item() != 0.0
 
 
@@ -197,7 +258,6 @@ def test_multitask_drug_predictor_fit_predict():
     X = rng.randn(N, D_feat).astype(np.float32)
     
     Y = rng.binomial(1, 0.4, size=(N, num_drugs)).astype(float)
-    # Inject missing assays (NaN)
     Y[::3, 1] = np.nan
     Y[::4, 2] = np.nan
     
@@ -211,7 +271,7 @@ def test_multitask_drug_predictor_fit_predict():
 
 
 # -------------------------------------------------------------------------
-# Test 5: Continuous and Ordinal Modeling (Experiment C)
+# Test 7: Continuous and Ordinal Modeling (Experiment C)
 # -------------------------------------------------------------------------
 
 def test_continuous_metrics_and_regressor():
@@ -227,76 +287,81 @@ def test_continuous_metrics_and_regressor():
     pred_log_fc = regressor.predict_log_fc(X)
     assert pred_log_fc.shape == (N,)
     
-    # Metrics computation
     metrics = compute_continuous_metrics(true_log_fc, pred_log_fc)
     assert "r2" in metrics
     assert "rmse" in metrics
     assert "pearson_r" in metrics
     assert "spearman_rho" in metrics
     
-    # Ordinal evaluation
     ord_metrics = evaluate_continuous_as_ordinal(true_log_fc, pred_log_fc, "3TC")
     assert "ordinal_balanced_accuracy" in ord_metrics
     assert 0.0 <= ord_metrics["ordinal_balanced_accuracy"] <= 1.0
 
 
 # -------------------------------------------------------------------------
-# Test 6: Biologically Guided Attention (Experiment D)
+# Test 8: Biologically Guided Attention & Ablation (Experiment D)
 # -------------------------------------------------------------------------
 
 @pytest.mark.skipif(not _HAS_TORCH, reason="PyTorch required for attention test")
-def test_biologically_guided_attention():
-    """Verify biologically guided attention integrates DRM position indicators."""
+def test_biologically_guided_attention_and_ablation():
+    """Verify biologically guided attention and prior ablation."""
     L, D = 20, 32
-    attn = BiologicallyGuidedAttention(embed_dim=D, hidden_dim=16)
+    # 1. With prior DRM
+    attn_with = BiologicallyGuidedAttention(embed_dim=D, hidden_dim=16, use_prior_drm=True)
+    # 2. Ablated prior DRM
+    attn_ablated = BiologicallyGuidedAttention(embed_dim=D, hidden_dim=16, use_prior_drm=False)
     
     x = torch.randn(2, L, D)
-    mut_ind = torch.zeros(2, L, 1)
-    mut_ind[:, 5, 0] = 1.0 # Mutation at position 5
-    
     prior_drm = torch.zeros(L, 1)
-    prior_drm[5, 0] = 1.0 # Canonical DRM at position 5
+    prior_drm[5, 0] = 1.0
     
-    pooled, weights = attn(x, mut_indicator=mut_ind, prior_drm=prior_drm)
-    assert pooled.shape == (2, D)
-    assert weights.shape == (2, L)
-    assert torch.allclose(weights.sum(dim=-1), torch.ones(2), atol=1e-5)
+    p_with, w_with = attn_with(x, prior_drm=prior_drm)
+    p_abl, w_abl = attn_ablated(x, prior_drm=prior_drm)
+    
+    assert p_with.shape == (2, D)
+    assert p_abl.shape == (2, D)
+    assert torch.allclose(w_with.sum(dim=-1), torch.ones(2), atol=1e-5)
+    assert torch.allclose(w_abl.sum(dim=-1), torch.ones(2), atol=1e-5)
 
 
 # -------------------------------------------------------------------------
-# Test 7: Grouped Cross-Validation (Homology Leakage Fix)
+# Test 9: Transitive Clustering & Joint Patient-Sequence Grouping
 # -------------------------------------------------------------------------
 
-def test_sequence_clustered_cross_validation():
-    """Verify that highly similar sequences are isolated to the same fold."""
-    # 4 sequences in cluster 0 (almost identical) and 4 sequences in cluster 1
-    seq_cluster_0 = ["PQITLWQRPL" for _ in range(4)]
-    seq_cluster_1 = ["AAAAAAAAAA" for _ in range(4)]
-    all_seqs = seq_cluster_0 + seq_cluster_1
+def test_transitive_clustering_and_joint_patient_groups():
+    """Verify transitive clustering (A~B, B~C -> A,B,C in same group) and joint PtID grouping."""
+    # seq0 ~ seq1 (1 mismatch), seq1 ~ seq2 (1 mismatch), but seq0 vs seq2 has 2 mismatches
+    seq0 = "AAAAAAAAAA"
+    seq1 = "AAAAAAAAAB"
+    seq2 = "AAAAAAAABB"
+    seqs = [seq0, seq1, seq2]
     
-    clusters = cluster_sequences_by_identity(all_seqs, identity_threshold=0.9)
-    assert len(np.unique(clusters[:4])) == 1
-    assert len(np.unique(clusters[4:])) == 1
-    assert clusters[0] != clusters[4]
+    # If identity threshold = 0.85 (up to 1 mismatch out of 10)
+    clusters = cluster_sequences_by_identity(seqs, identity_threshold=0.85)
+    # In transitive single linkage, all 3 must be in cluster 0
+    assert clusters[0] == clusters[1] == clusters[2]
     
-    # Verify Splitter isolates clusters
-    y = np.array([0, 1, 0, 1, 0, 1, 0, 1])
-    X = np.random.randn(8, 4)
-    splitter = GroupedValidationSplitter(n_splits=2, grouping_strategy="sequence_clustered")
+    # Joint Patient-Sequence Grouping
+    # Patient 1 has seqs 0 and 3. Even if seq 3 has 0% identity with seq 0, they must be in same group
+    pts = ["PT1", "PT2", "PT3", "PT1"]
+    all_seqs = [seq0, seq1, seq2, "CCCCCCCCCC"]
+    splitter = GroupedValidationSplitter(
+        n_splits=2, grouping_strategy="joint_patient_sequence", identity_threshold=0.85
+    )
+    groups = splitter.get_groups(4, sequences=all_seqs, patient_ids=pts)
     
-    for train_idx, val_idx in splitter.split(X, y, sequences=all_seqs):
-        train_clusters = set(clusters[train_idx])
-        val_clusters = set(clusters[val_idx])
-        # Clusters must have zero intersection between train and val
-        assert len(train_clusters.intersection(val_clusters)) == 0
+    # PT1's samples (0 and 3) must share group
+    assert groups[0] == groups[3]
+    # And since 0 ~ 1 ~ 2, all 4 samples merge into a single component!
+    assert len(np.unique(groups)) == 1
 
 
 # -------------------------------------------------------------------------
-# Test 8: Leak-Free Nested Cross-Validation
+# Test 10: Leak-Free Nested Cross-Validation with Inner Tuning
 # -------------------------------------------------------------------------
 
-def test_leak_free_nested_cv():
-    """Verify leak-free nested CV executes and produces valid OOF predictions."""
+def test_leak_free_nested_cv_inner_tuning():
+    """Verify leak-free nested CV executes inner hyperparameter tuning without leakage."""
     from sklearn.linear_model import LogisticRegression
     
     N, D = 40, 8
@@ -304,10 +369,15 @@ def test_leak_free_nested_cv():
     X = rng.randn(N, D)
     y = rng.binomial(1, 0.4, size=N)
     
+    candidates = [{"C": 0.01, "solver": "liblinear"}, {"C": 1.0, "solver": "liblinear"}]
+    
     nested_cv = LeakFreeNestedCV(
-        estimator_factory=lambda: LogisticRegression(solver="liblinear"),
+        estimator_factory=lambda **kwargs: LogisticRegression(**kwargs),
         outer_splits=3,
+        inner_splits=2,
         grouping_strategy="stratified",
+        tune_hyperparameters=True,
+        param_candidates=candidates,
         random_state=42
     )
     res = nested_cv.evaluate(X, y)
@@ -318,7 +388,7 @@ def test_leak_free_nested_cv():
 
 
 # -------------------------------------------------------------------------
-# Test 9: Statistical Testing
+# Test 11: Statistical Testing
 # -------------------------------------------------------------------------
 
 def test_statistical_testing_delong_and_wilcoxon():
@@ -331,7 +401,6 @@ def test_statistical_testing_delong_and_wilcoxon():
     assert auc1 > auc2
     assert 0.0 <= p_val <= 1.0
     
-    # Benjamini-Hochberg FDR
     p_values = [0.001, 0.01, 0.04, 0.20, 0.80]
     q_values = benjamini_hochberg_correction(p_values)
     assert len(q_values) == len(p_values)

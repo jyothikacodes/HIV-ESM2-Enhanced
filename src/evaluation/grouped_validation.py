@@ -3,11 +3,13 @@ Patient-grouped and sequence-clustered cross-validation for HIV resistance.
 
 Prevents sequence similarity and longitudinal patient leakage:
 - Patient-grouped CV: isolates from the same patient (PtID) are strictly isolated to one fold.
-- Sequence-clustered CV: near-identical sequences (>90% or >95% similarity) are clustered together,
-  ensuring homologous sequences never leak across train and validation splits.
+- Sequence-clustered CV: near-identical sequences (>90% or >95% similarity) are clustered together
+  using transitive connected-component single-linkage clustering.
+- Joint patient & sequence clustering: merges sequence clusters and patient IDs so that no sequence
+  and no patient crosses train/test boundaries.
 """
 
-from typing import Dict, Generator, List, Optional, Tuple, Union
+from typing import Dict, Generator, List, Optional, Set, Tuple, Union
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import GroupKFold, StratifiedGroupKFold
@@ -29,7 +31,8 @@ def cluster_sequences_by_identity(
     identity_threshold: float = 0.95
 ) -> np.ndarray:
     """
-    Cluster sequences using greedy single-linkage clustering based on sequence identity.
+    Cluster sequences using transitive single-linkage (connected components)
+    based on sequence identity.
     
     Args:
         sequences: List of amino acid sequences.
@@ -39,33 +42,106 @@ def cluster_sequences_by_identity(
         cluster_ids: Array of shape (N,) containing integer cluster assignments.
     """
     N = len(sequences)
-    cluster_ids = np.full(N, -1, dtype=int)
-    current_cluster = 0
     max_distance = 1.0 - identity_threshold
 
+    # Build adjacency graph
+    adj: Dict[int, List[int]] = {i: [] for i in range(N)}
     for i in range(N):
-        if cluster_ids[i] != -1:
-            continue
-            
-        cluster_ids[i] = current_cluster
-        seed_seq = sequences[i]
-        
-        # Compare with remaining unclustered sequences
         for j in range(i + 1, N):
-            if cluster_ids[j] == -1:
-                dist = compute_sequence_hamming_distance(seed_seq, sequences[j])
-                if dist <= max_distance:
-                    cluster_ids[j] = current_cluster
-                    
-        current_cluster += 1
-        
+            dist = compute_sequence_hamming_distance(sequences[i], sequences[j])
+            if dist <= max_distance:
+                adj[i].append(j)
+                adj[j].append(i)
+
+    # Find connected components via BFS
+    visited = set()
+    cluster_ids = np.full(N, -1, dtype=int)
+    current_cluster = 0
+
+    for i in range(N):
+        if i not in visited:
+            queue = [i]
+            visited.add(i)
+            cluster_ids[i] = current_cluster
+            
+            while queue:
+                curr = queue.pop(0)
+                for neighbor in adj[curr]:
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        cluster_ids[neighbor] = current_cluster
+                        queue.append(neighbor)
+                        
+            current_cluster += 1
+
     return cluster_ids
+
+
+def create_joint_patient_sequence_groups(
+    sequences: Optional[List[str]] = None,
+    patient_ids: Optional[Union[List[str], np.ndarray]] = None,
+    identity_threshold: float = 0.95,
+    n_samples: int = 0
+) -> np.ndarray:
+    """
+    Construct joint groups merging patient identifiers and sequence clusters.
+    Guarantees:
+    - No two sequences with identity >= identity_threshold end up in different groups.
+    - No two isolates from the same patient end up in different groups.
+    """
+    N = n_samples if n_samples > 0 else (len(sequences) if sequences is not None else len(patient_ids))
+    if sequences is None and patient_ids is None:
+        return np.arange(N)
+
+    # Graph connecting sample indices
+    adj: Dict[int, List[int]] = {i: [] for i in range(N)}
+
+    # Connect samples from same patient
+    if patient_ids is not None:
+        pt_map: Dict[str, List[int]] = {}
+        for idx, pt in enumerate(patient_ids):
+            pt_map.setdefault(str(pt), []).append(idx)
+        for pt, indices in pt_map.items():
+            for i in range(len(indices)):
+                for j in range(i + 1, len(indices)):
+                    adj[indices[i]].append(indices[j])
+                    adj[indices[j]].append(indices[i])
+
+    # Connect samples within sequence identity threshold
+    if sequences is not None:
+        max_dist = 1.0 - identity_threshold
+        for i in range(N):
+            for j in range(i + 1, N):
+                if compute_sequence_hamming_distance(sequences[i], sequences[j]) <= max_dist:
+                    adj[i].append(j)
+                    adj[j].append(i)
+
+    # Transitive connected components
+    visited = set()
+    group_ids = np.full(N, -1, dtype=int)
+    current_group = 0
+
+    for i in range(N):
+        if i not in visited:
+            queue = [i]
+            visited.add(i)
+            group_ids[i] = current_group
+            while queue:
+                curr = queue.pop(0)
+                for nbr in adj[curr]:
+                    if nbr not in visited:
+                        visited.add(nbr)
+                        group_ids[nbr] = current_group
+                        queue.append(nbr)
+            current_group += 1
+
+    return group_ids
 
 
 class GroupedValidationSplitter:
     """
     Cross-validation splitter supporting patient-grouped, sequence-clustered,
-    or combined grouping strategies.
+    and joint patient-sequence grouping strategies.
     """
     def __init__(
         self,
@@ -74,17 +150,28 @@ class GroupedValidationSplitter:
         identity_threshold: float = 0.95,
         random_state: int = 42
     ):
-        """
-        Args:
-            n_splits: Number of CV folds.
-            grouping_strategy: 'patient_grouped', 'sequence_clustered', or 'stratified'.
-            identity_threshold: Threshold for sequence clustering (default 0.95).
-            random_state: Random seed.
-        """
         self.n_splits = n_splits
         self.grouping_strategy = grouping_strategy
         self.identity_threshold = identity_threshold
         self.random_state = random_state
+
+    def get_groups(
+        self,
+        N: int,
+        sequences: Optional[List[str]] = None,
+        patient_ids: Optional[Union[List[str], np.ndarray]] = None
+    ) -> np.ndarray:
+        if self.grouping_strategy == "patient_grouped" and patient_ids is not None:
+            return create_joint_patient_sequence_groups(sequences=None, patient_ids=patient_ids, n_samples=N)
+        elif self.grouping_strategy == "sequence_clustered" and sequences is not None:
+            return cluster_sequences_by_identity(sequences, self.identity_threshold)
+        elif self.grouping_strategy == "joint_patient_sequence":
+            return create_joint_patient_sequence_groups(
+                sequences=sequences, patient_ids=patient_ids, identity_threshold=self.identity_threshold, n_samples=N
+            )
+        else:
+            rng = np.random.RandomState(self.random_state)
+            return rng.randint(0, self.n_splits, size=N)
 
     def split(
         self,
@@ -93,25 +180,12 @@ class GroupedValidationSplitter:
         sequences: Optional[List[str]] = None,
         patient_ids: Optional[Union[List[str], np.ndarray]] = None
     ) -> Generator[Tuple[np.ndarray, np.ndarray], None, None]:
-        """
-        Generate (train_idx, val_idx) fold splits ensuring complete isolation of groups.
-        """
         N = len(y)
-        
-        if self.grouping_strategy == "patient_grouped" and patient_ids is not None:
-            groups = np.array(patient_ids)
-        elif self.grouping_strategy == "sequence_clustered" and sequences is not None:
-            groups = cluster_sequences_by_identity(sequences, self.identity_threshold)
-        else:
-            # Fallback to random grouping if metadata is absent
-            rng = np.random.RandomState(self.random_state)
-            groups = rng.randint(0, self.n_splits, size=N)
+        groups = self.get_groups(N, sequences=sequences, patient_ids=patient_ids)
 
-        # Check unique groups
         n_unique_groups = len(np.unique(groups))
         effective_splits = min(self.n_splits, n_unique_groups)
         
-        # Try StratifiedGroupKFold if labels are binary, else GroupKFold
         valid_labels = ~np.isnan(y)
         if valid_labels.all() and len(np.unique(y)) > 1:
             try:
@@ -122,6 +196,15 @@ class GroupedValidationSplitter:
             except ValueError:
                 pass
                 
-        gkf = GroupKFold(n_splits=effective_splits)
-        for train_idx, val_idx in gkf.split(X, y, groups):
+        # GroupKFold with group-level shuffling
+        rng = np.random.RandomState(self.random_state)
+        unique_groups = np.unique(groups)
+        rng.shuffle(unique_groups)
+        
+        # Partition groups into folds
+        fold_groups = np.array_split(unique_groups, effective_splits)
+        for fold in range(effective_splits):
+            test_group_set = set(fold_groups[fold])
+            val_idx = np.where(np.isin(groups, list(test_group_set)))[0]
+            train_idx = np.where(~np.isin(groups, list(test_group_set)))[0]
             yield train_idx, val_idx

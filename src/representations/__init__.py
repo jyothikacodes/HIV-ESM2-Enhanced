@@ -16,6 +16,10 @@ from .reference_delta import (
     compute_per_residue_delta,
     pool_embeddings,
 )
+from .mutation_interactions import (
+    EpistaticInteractionClassifier,
+    PairwiseMutationInteractionEncoder,
+)
 
 __all__ = [
     "CLINICAL_CUTOFFS",
@@ -30,4 +34,6 @@ __all__ = [
     "ReferenceDeltaRepresentationBuilder",
     "compute_per_residue_delta",
     "pool_embeddings",
+    "PairwiseMutationInteractionEncoder",
+    "EpistaticInteractionClassifier",
 ]
