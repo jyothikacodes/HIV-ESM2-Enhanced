@@ -17,9 +17,16 @@ embeddings/
 *.joblib
 models/
 
-# Results and figures (regenerated locally, not versioned)
-results/
-figures/
+# Results and figures: track evaluation CSV metrics and summary figures
+!results/
+!results/**/*.csv
+!results/**/*.png
+!results/**/.gitkeep
+!figures/
+!figures/**/*.png
+!figures/**/.gitkeep
+results/checkpoints/
+results/**/checkpoints/
 
 
 # Python
@@ -43,6 +50,9 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# Large zip files
+*.zip
 
 # Virtual environments
 venv/

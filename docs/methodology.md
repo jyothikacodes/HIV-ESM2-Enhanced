@@ -85,3 +85,19 @@ Probability calibration ensures that output probabilities match clinical likelih
 - **Isotonic Regression**: A non-parametric calibration function is fit to validation predictions.
 - **Multiclass Calibration**: For ternary classification, probability calibration is performed using a One-vs-Rest (OvR) scaling strategy, scaling each class independently and normalizing predictions to sum to 1.
 - **Auto-Calibration**: Evaluates multiple calibration methods and selects the best calibration model based on validation Brier score.
+
+---
+
+## 5. Methodological Limitations and Validation Boundaries
+
+### 5.1 Baseline Equivalence vs. Predictive Gain
+While protein language models capture rich structural and evolutionary contexts, direct empirical comparisons with XGBoost on explicit binary mutation encodings demonstrate that sparse mutation features achieve a mean AUC of **0.9466**, which matches or slightly exceeds ESM-2 embeddings (0.9404 for LR, 0.9430 for XGBoost). DeLong testing reveals that ESM-2 offers statistically significant gains on only 1 of 18 antiretrovirals (EFV). The practical strength of ESM-2 lies in end-to-end resistance prediction from unaligned FASTA sequences without requiring reference strain alignment or manual mutation extraction.
+
+### 5.2 Pseudo-Temporal Holdout Proxy
+True clinical sample collection dates are not uniformly annotated across public HIVDB records. Therefore, temporal splits utilize numerical `SeqID` order as a submission-time proxy. While this provides an approximate chronological test, it does not account for retrospective batch submissions or geographical sampling variations.
+
+### 5.3 Potential Optimism from Homology Leakage
+Standard stratified K-fold cross-validation treats each sequence isolate as independent. Because HIVDB includes longitudinal sequences from single patients and circulating recombinant forms with near-identical sequence profiles, random CV splits allow related sequences to enter both training and validation folds. To assess true out-of-cluster generalization, sequence-similarity-grouped cross-validation (`cluster_similarity_cv()`) is implemented in `src/evaluation.py`.
+
+### 5.4 SHAP Latent Features vs. Residue Mapping
+Models trained on pooled continuous representations operate on 1,280 latent embedding dimensions (`Embedding_Dim_0` through `Embedding_Dim_1279`). These dimensions cannot be directly indexed as protein positions (e.g. position 1232 in a 99-residue protease). True residue-level attribution requires projecting token representations back through per-residue embeddings (`compute_attention_residue_shap()`), strictly bounded to the protein reference length (1..99 for PR, 1..240 for RT).

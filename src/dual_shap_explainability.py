@@ -11,7 +11,10 @@ import sys
 import re
 import numpy as np
 import pandas as pd
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
 import matplotlib.pyplot as plt

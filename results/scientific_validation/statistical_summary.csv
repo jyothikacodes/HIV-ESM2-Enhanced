@@ -1,0 +1,3 @@
+test_name,statistic,p_value,mean_baseline,mean_enhanced,difference,improvement_flag
+Temporal Robustness (Robustness Drop Comparison),41.0,0.975860595703125,-0.09604701832453144,0.05390973993789354,-0.149956758262425,False
+Overall CV AUC Comparison,165.0,5.340576171875e-05,0.47392837665086357,0.5967988338686542,0.12287045721779061,True

@@ -13,7 +13,10 @@ import sys
 import re
 import numpy as np
 import pandas as pd
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path

@@ -13,7 +13,10 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 from scipy.stats import fisher_exact
 from tqdm import tqdm
 

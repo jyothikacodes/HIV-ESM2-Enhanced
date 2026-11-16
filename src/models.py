@@ -722,17 +722,27 @@ def per_drug_training(
         if class2_col in phenotypes.columns:
             y = phenotypes[class2_col].values
         elif class3_col in phenotypes.columns:
-            # Prefer class3 if class2 isn't available (may encode resistance differently)
-            y = phenotypes[class3_col].values
+            # Binarize class3: susceptible (0) vs intermediate/resistant (>= 1)
+            c3_vals = phenotypes[class3_col].values
+            y = np.full_like(c3_vals, np.nan, dtype=float)
+            valid_c3 = ~np.isnan(c3_vals)
+            y[valid_c3] = (c3_vals[valid_c3] >= 1.0).astype(float)
         elif fc_col in phenotypes.columns:
-            # Binarize fold-change values using the standard threshold (>=2.5)
+            # Binarize fold-change values using standard cutoff (>= 2.5)
             fc_vals = phenotypes[fc_col].values
             y = np.full_like(fc_vals, np.nan, dtype=float)
             valid_fc = ~np.isnan(fc_vals)
             y[valid_fc] = (fc_vals[valid_fc] >= 2.5).astype(float)
         elif drug in phenotypes.columns:
-            # Fall back to the raw drug column if present (assume already binary)
-            y = phenotypes[drug].values
+            raw_vals = phenotypes[drug].values
+            y = np.full_like(raw_vals, np.nan, dtype=float)
+            valid_raw = ~np.isnan(raw_vals)
+            unique_raw = set(np.unique(raw_vals[valid_raw]))
+            if unique_raw.issubset({0, 1, 0.0, 1.0}):
+                y[valid_raw] = raw_vals[valid_raw]
+            else:
+                # Binarize continuous values at threshold 2.5
+                y[valid_raw] = (raw_vals[valid_raw] >= 2.5).astype(float)
         else:
             reason = "no label column found"
             print(f"  Skipping {drug}: {reason}")
@@ -754,10 +764,10 @@ def per_drug_training(
         else:
             X_valid = X[valid_mask]
             
-        y_valid = y[valid_mask].astype(int)
+        y_valid = (y[valid_mask] >= 1.0).astype(int)
 
-        n_resistant = int(y_valid.sum())
-        n_susceptible = int(len(y_valid) - n_resistant)
+        n_resistant = int((y_valid == 1).sum())
+        n_susceptible = int((y_valid == 0).sum())
 
         if len(np.unique(y_valid)) < 2:
             reason = "single class only"

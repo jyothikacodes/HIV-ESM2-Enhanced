@@ -20,10 +20,14 @@ keywords:
   - drug resistance mutations
 abstract: >-
   A machine learning pipeline for predicting HIV drug resistance from
-  protein sequences using ESM-2 protein language model embeddings. The
-  attention-weighted pooling approach achieves 0.9487 mean nested cross-validation
-  AUC across 18 antiretroviral drugs, with 2.48x enrichment for known drug
-  resistance mutations in high-attention positions.
+  protein sequences using ESM-2 protein language model embeddings. Under
+  nested cross-validation across 18 antiretroviral drugs, ESM-2 embeddings
+  achieve performance comparable to traditional sparse mutation encodings
+  (0.9404-0.9487 mean AUC vs 0.9466 baseline) without requiring explicit
+  mutation calling against reference sequences. High-attribution positions
+  show enrichment for known drug resistance mutations (averaging 3.2x to 6.1x
+  across top-ranked residues, with statistically significant enrichment in
+  approximately 35% of per-drug tests), with lower significance in protease inhibitors.
 preferred-citation:
   type: article
   authors:

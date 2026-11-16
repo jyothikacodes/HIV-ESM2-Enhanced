@@ -33,7 +33,13 @@ python scripts/run_improved_pipeline.py --full_data --optuna_trials 50 --results
 
 Outputs
 - Primary results: `results/improved_pipeline/drug_wise_performance.csv`
+- Full nested CV table: `results/improved_pipeline/nested_cv_results.csv`
+- Baseline benchmarks: `results/baseline_results.csv`
+- ESM-2 vs Baseline statistical comparison: `results/esm2_vs_baseline.csv`
+- Scientific validation tables: `results/scientific_validation/`
 - Figures: `results/improved_pipeline/figures/`
 
-Notes
-- To reproduce exact floating-point results, run on the same hardware and use provided seeds. Some nondeterminism may remain due to parallelism in XGBoost and PyTorch backends.
+Important Reproducibility Notes
+- **Cohort Size vs. Subsample Tests**: Running with `--subset_size 250` or the smoke-test blocks in Notebook 07 will produce lower AUCs (0.47–0.70) due to severe class scarcity in minority drugs. The reported ~0.9487 mean nested CV AUC requires the full cohort.
+- **Homology-Aware Splits**: Standard cross-validation uses random stratified splits. To reproduce or test models under strict identity-clustered splits (mitigating potential homology leakage between similar patient isolates), use `cluster_similarity_cv` from `src.evaluation`.
+- **Nondeterminism**: To reproduce exact floating-point results, run on the same hardware and use provided seeds. Some minor nondeterminism may remain due to GPU CUDA kernels in XGBoost and PyTorch backends.

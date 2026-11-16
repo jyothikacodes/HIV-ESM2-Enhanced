@@ -1,0 +1,6 @@
+drug,drug_class,mutation,position,mean_causal_effect,rank
+ATV,PI,L90M,90,0.1234,1
+ATV,PI,M36I,36,0.0543,2
+ATV,PI,I84V,84,0.0312,3
+ATV,PI,L33F,33,0.0198,4
+DRV,PI,L90M,90,0.0876,1

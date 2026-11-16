@@ -538,6 +538,7 @@ def run_all_experiments(sub_data, results_dir, seed=42):
         rep_fc_values = renamed_pheno[f"{rep_drug}_FC"].values
         y_rep = (rep_fc_values[rep_notna_mask] >= 2.5).astype(int)
         X_rep = np.array([np.mean(e, axis=0) for i, e in enumerate(per_residue) if rep_notna_mask[i]])
+        per_res_rep = [e for i, e in enumerate(per_residue) if rep_notna_mask[i]]
         
         # In case representative selection is single-class
         if len(np.unique(y_rep)) >= 2:
@@ -549,7 +550,8 @@ def run_all_experiments(sub_data, results_dir, seed=42):
             
             print(f"Computing SHAP values for {rep_drug} (n_samples={len(y_rep)}, background=50)...")
             shap_res = compute_shap_with_residue_mapping(
-                shap_model, X_rep_scaled, reference, n_background=50, random_state=seed
+                shap_model, X_rep_scaled, reference, n_background=50, random_state=seed,
+                per_residue_embeddings=per_res_rep
             )
             
             # Compare with IAS-USA 2022 guidelines

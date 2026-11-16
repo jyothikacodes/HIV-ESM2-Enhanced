@@ -446,3 +446,89 @@ def compare_esm2_vs_baseline(
     }])
 
     return pd.concat([df, summary], ignore_index=True)
+
+
+def cluster_similarity_cv(
+    X: np.ndarray,
+    sequences: List[str],
+    y: np.ndarray,
+    model,
+    n_splits: int = 5,
+    similarity_threshold: float = 0.95,
+    random_state: int = 42
+) -> Tuple[List[float], np.ndarray, np.ndarray]:
+    """
+    Perform sequence-similarity-grouped cross-validation to mitigate homology leakage.
+
+    Standard random stratified K-fold cross-validation on HIVDB cohorts allows
+    near-identical viral isolates (e.g. from the same patient or transmission clusters)
+    to appear in both train and validation folds, causing optimistic performance estimates.
+
+    This function assigns sequences sharing >= similarity_threshold sequence identity
+    to common clusters, and uses StratifiedGroupKFold to enforce strict cluster-level separation.
+
+    Args:
+        X: Feature matrix of shape (n_samples, n_features)
+        sequences: List of amino acid sequence strings
+        y: Binary labels array of shape (n_samples,)
+        model: Sklearn-compatible classifier with fit and predict_proba
+        n_splits: Number of CV folds
+        similarity_threshold: Sequence identity threshold for clustering (default: 0.95)
+        random_state: Random seed
+
+    Returns:
+        Tuple of:
+        - cv_scores: List of ROC-AUC scores per fold
+        - all_predictions: Out-of-fold predicted probabilities
+        - cluster_labels: Array of cluster assignment IDs per sample
+    """
+    from sklearn.model_selection import StratifiedGroupKFold
+
+    n_samples = len(sequences)
+    if n_samples != len(y) or n_samples != len(X):
+        raise ValueError("X, sequences, and y must have identical lengths.")
+
+    # Approximate sequence identity clustering
+    cluster_labels = np.full(n_samples, -1, dtype=int)
+    current_cluster = 0
+
+    for i in range(n_samples):
+        if cluster_labels[i] != -1:
+            continue
+        cluster_labels[i] = current_cluster
+        seq_i = sequences[i]
+        len_i = len(seq_i)
+
+        for j in range(i + 1, n_samples):
+            if cluster_labels[j] != -1:
+                continue
+            seq_j = sequences[j]
+            min_len = min(len_i, len(seq_j))
+            if min_len == 0:
+                continue
+            matches = sum(seq_i[k] == seq_j[k] for k in range(min_len))
+            identity = matches / min_len
+            if identity >= similarity_threshold:
+                cluster_labels[j] = current_cluster
+
+        current_cluster += 1
+
+    sgkf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    cv_scores = []
+    all_predictions = np.zeros(n_samples)
+
+    for train_idx, val_idx in sgkf.split(X, y, groups=cluster_labels):
+        X_train, X_val = X[train_idx], X[val_idx]
+        y_train, y_val = y[train_idx], y[val_idx]
+
+        if len(np.unique(y_train)) < 2 or len(np.unique(y_val)) < 2:
+            continue
+
+        model.fit(X_train, y_train)
+        y_pred = model.predict_proba(X_val)[:, 1]
+        all_predictions[val_idx] = y_pred
+
+        score = roc_auc_score(y_val, y_pred)
+        cv_scores.append(float(score))
+
+    return cv_scores, all_predictions, cluster_labels
